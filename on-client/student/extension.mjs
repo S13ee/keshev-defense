@@ -170,7 +170,115 @@ export function createStudentView() {
 
       return root;
     },
-    renderDecision() { return '학생 구현 대기: 서버의 판정과 이유를 연결하세요.'; },
+    renderDecision(input) {
+      const root = document.createElement('div');
+      root.setAttribute('aria-label', '업무 앱 접속 판정');
+      const appendText = (parent, tag, value, state) => {
+        const node = document.createElement(tag);
+        node.textContent = value;
+        if (state) node.setAttribute('data-state', state);
+        parent.append(node);
+        return node;
+      };
+      const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+      const payload = isRecord(input) ? input : null;
+      const rawCode = (value) => typeof value === 'string' && value.trim() ? value.slice(0, 40) : null;
+      const unknownValue = (value) => {
+        const raw = rawCode(value);
+        return raw === null ? '확인 불가(값 없음)' : `확인 불가(받은 값: ${raw})`;
+      };
+      const displayValue = (value) => {
+        if (typeof value === 'string' && value.trim()) return value;
+        if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+        return '확인 불가';
+      };
+      const mode = payload
+        ? (payload.mode ?? (isRecord(payload.meta) ? payload.meta.mode : undefined))
+        : undefined;
+      let modeLabel = unknownValue(mode);
+      if (mode === 'connected') modeLabel = '실제 연결(connected)';
+      else if (mode === 'demo') modeLabel = '예제 자료(demo)';
+      else if (mode === 'disconnected') modeLabel = '연결 없음(disconnected)';
+      else if (mode === 'unknown') modeLabel = '확인 불가(unknown)';
+      appendText(root, 'p', `연결 모드: ${modeLabel}`);
+
+      if (!payload) {
+        appendText(root, 'p', '확인 불가(값 없음)', 'unknown');
+        return root;
+      }
+
+      const data = isRecord(payload.data) ? payload.data : {};
+      const status = payload.status;
+      if (status === 'idle') {
+        appendText(root, 'p', '앱을 골라 접속을 요청하세요(idle)', 'idle');
+        return root;
+      }
+      if (status === 'loading') {
+        appendText(root, 'p', '판정 확인 중(loading)', 'loading');
+        return root;
+      }
+      if (status === 'error') {
+        const error = isRecord(payload.error) ? payload.error : {};
+        const code = rawCode(error.code) ?? '확인 불가';
+        const message = typeof error.message === 'string' && error.message.trim()
+          ? error.message
+          : '원인 확인 불가';
+        if (error.code === 'CONTRACT_MISMATCH' || error.code === 'ENGINE_RESULT_UNVERIFIED') {
+          appendText(root, 'p', `확인 불가: 응답 형식이 계약과 다름(error, ${code}): ${message} · 허용도 거부도 아닙니다`, 'unknown');
+        } else {
+          appendText(root, 'p', `요청 실패(error, ${code}): ${message} · 접근 거부 판정이 아닙니다`, 'error');
+        }
+        return root;
+      }
+      if (status !== 'ok') {
+        appendText(root, 'p', status === undefined || status === null || status === ''
+          ? '확인 불가(값 없음)'
+          : unknownValue(status), 'unknown');
+        return root;
+      }
+
+      appendText(root, 'p', '응답 받음(ok)', 'ok');
+      const hasIdentifier = (value) =>
+        (typeof value === 'string' && value.trim().length > 0) ||
+        (typeof value === 'number' && Number.isFinite(value));
+      const selectedAppId = hasIdentifier(payload.appId) ? payload.appId : data.appId;
+      const hasSelectedAppId = hasIdentifier(selectedAppId);
+      const hasTargetAppId = hasIdentifier(data.appId);
+      const mismatch = hasIdentifier(payload.appId) && hasTargetAppId && payload.appId !== data.appId;
+
+      if (mismatch) {
+        appendText(root, 'p', '확인 불가: 선택한 앱과 판정 대상 앱이 다름 · 허용되지 않음', 'mismatch');
+        appendText(root, 'p', `선택한 앱 ID: ${displayValue(selectedAppId)}`);
+        appendText(root, 'p', `판정 대상 앱 ID: ${displayValue(data.appId)}`);
+        return root;
+      } else {
+        const appId = hasSelectedAppId ? selectedAppId : undefined;
+        appendText(root, 'p', `대상 앱 ID: ${displayValue(appId)}`);
+        const decision = data.decision;
+        if (decision === 'allow') {
+          appendText(root, 'p', '판정: 허용(allow)', 'allow');
+          appendText(root, 'p', '정책상 허용이며 실제 앱 접속 성공을 보장하지 않습니다');
+        } else if (decision === 'deny') {
+          appendText(root, 'p', '판정: 거부(deny)', 'deny');
+        } else if (decision === 'challenge') {
+          appendText(root, 'p', '판정: 추가 확인 필요(challenge)', 'challenge');
+          appendText(root, 'p', '이 앱이 추가 인증을 대신 수행하지 않습니다');
+        } else if (decision === 'unknown') {
+          appendText(root, 'p', '판정: 확인 불가(unknown) · 허용되지 않음', 'unknown');
+        } else {
+          const decisionLabel = decision === undefined || decision === null || decision === ''
+            ? '확인 불가(값 없음)'
+            : unknownValue(decision);
+          appendText(root, 'p', `판정: ${decisionLabel} · 허용되지 않음`, 'unknown');
+        }
+      }
+
+      const reason = typeof data.reason === 'string' && data.reason.trim() ? data.reason : '확인 불가';
+      const checkedAtValue = data.checkedAt ?? (isRecord(payload.meta) ? payload.meta.checkedAt : undefined);
+      appendText(root, 'p', `판정 이유: ${reason}`);
+      appendText(root, 'p', `판정 시각: ${displayValue(checkedAtValue)}`);
+      return root;
+    },
     renderEvents() { return '학생 구현 대기: 본인 접속·XDR 기록을 연결하세요.'; },
     renderStatus() { return '학생 구현 대기: 기기·세션·알림과 연결 점검 상태를 구분하세요.'; },
     renderVulnerabilities() { return '학생 구현 대기: 정확한 설치 버전·OSV 출처·조회 시각·부분 결과·조회 실패를 구분하세요.'; },
