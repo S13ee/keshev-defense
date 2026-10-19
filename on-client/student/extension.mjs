@@ -13,29 +13,36 @@ export function createStudentView() {
         if (!isRecord(resource)) return 'unknown';
         return ['loading', 'ok', 'error', 'idle'].includes(resource.status) ? resource.status : 'unknown';
       };
+      const rawCode = (value) => typeof value === 'string' && value.trim() ? value.slice(0, 40) : null;
+      const unknownCodeLabel = (value) => {
+        const raw = rawCode(value);
+        return raw === null ? '확인 불가(값 없음)' : `확인 불가(받은 값: ${raw})`;
+      };
       const modeLabel = (resource) => {
         const mode = isRecord(resource)
           ? (resource.mode ?? (isRecord(resource.meta) ? resource.meta.mode : undefined))
           : undefined;
-        if (mode === 'connected') return '실제 연결';
-        if (mode === 'demo') return '예제 자료';
-        if (mode === 'disconnected') return '연결 없음';
-        return '확인 불가';
+        if (mode === 'connected') return '실제 연결(connected)';
+        if (mode === 'demo') return '예제 자료(demo)';
+        if (mode === 'disconnected') return '연결 없음(disconnected)';
+        if (mode === 'unknown') return '확인 불가(unknown)';
+        return unknownCodeLabel(mode);
       };
       const statusMessage = (resource) => {
         const status = resourceStatus(resource);
-        if (status === 'loading') return '불러오는 중';
-        if (status === 'idle') return '아직 불러오지 않음';
+        if (status === 'loading') return '불러오는 중(loading)';
+        if (status === 'idle') return '아직 불러오지 않음(idle)';
+        if (status === 'ok') return '응답 받음(ok)';
         if (status === 'error') {
           const error = isRecord(resource) && isRecord(resource.error) ? resource.error : {};
           const message = typeof error.message === 'string' && error.message.trim() ? error.message : '원인 확인 불가';
+          const code = rawCode(error.code) ?? '확인 불가';
           if (error.code === 'CONTRACT_MISMATCH' || error.code === 'ENGINE_RESULT_UNVERIFIED') {
-            return `확인 불가: 응답 형식이 계약과 다름 · ${message}`;
+            return `확인 불가: 응답 형식이 계약과 다름(error, ${code}): ${message}`;
           }
-          return `연결 실패: ${message}`;
+          return `연결 실패(error, ${code}): ${message}`;
         }
-        if (status !== 'ok') return '확인 불가';
-        return null;
+        return isRecord(resource) ? unknownCodeLabel(resource.status) : '확인 불가(값 없음)';
       };
       const appendText = (parent, tag, value, state) => {
         const node = document.createElement(tag);
@@ -49,10 +56,8 @@ export function createStudentView() {
       };
       const appendResourceStatus = (parent, resource) => {
         const message = statusMessage(resource);
-        if (message !== null) {
-          const status = resourceStatus(resource);
-          appendText(parent, 'p', message, status === 'unknown' ? 'unknown' : status);
-        }
+        const status = resourceStatus(resource);
+        appendText(parent, 'p', message, status === 'unknown' ? 'unknown' : status);
       };
       const valueOrUnknown = (value) => {
         if (typeof value === 'string' && value.trim()) return value;
@@ -63,16 +68,25 @@ export function createStudentView() {
         if (kind === 'device') {
           if (value === 'compliant') return { label: '보안 기준 충족', state: 'compliant' };
           if (value === 'noncompliant') return { label: '주의: 보안 기준 미충족', state: 'noncompliant' };
-          return { label: '확인 불가', state: 'unknown' };
+          if (value === 'unknown') return { label: '확인 불가', state: 'unknown' };
+          return { label: unknownCodeLabel(value), state: 'unknown' };
         }
         if (value === 'active') return { label: '활성', state: 'active' };
         if (value === 'expired') return { label: '주의: 만료', state: 'expired' };
         if (value === 'revoked') return { label: '주의: 철회됨', state: 'revoked' };
-        return { label: '확인 불가', state: 'unknown' };
+        if (value === 'unknown') return { label: '확인 불가', state: 'unknown' };
+        return { label: unknownCodeLabel(value), state: 'unknown' };
       };
       const appendStatusField = (parent, kind, value) => {
         const shown = statusValue(kind, value);
-        appendText(parent, 'p', `상태: ${shown.label}`, shown.state);
+        const raw = rawCode(value);
+        let label;
+        if (shown.state === 'unknown' && value !== 'unknown') {
+          label = shown.label;
+        } else {
+          label = `${shown.label}(${raw ?? '값 없음'})`;
+        }
+        appendText(parent, 'p', `상태: ${label}`, shown.state);
       };
       const makeSection = (title) => {
         const section = document.createElement('section');
