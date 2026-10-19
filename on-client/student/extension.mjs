@@ -787,8 +787,228 @@ export function createStudentView() {
       return root;
     },
     renderVulnerabilities() { return '학생 구현 대기: 정확한 설치 버전·OSV 출처·조회 시각·부분 결과·조회 실패를 구분하세요.'; },
-    renderAiConnection() { return '학생 구현 대기: 모델 응답 점검과 실제 사건 설명을 구분하고 AI 오류·취소·수동 복구를 안내하세요.'; },
-    renderExplanation() { return '학생 구현 대기: 선택한 사건의 근거·규칙·현재 상태와 AI 설명을 연결하세요. 제안은 자동 실행하지 않습니다.'; },
+    renderAiConnection(input) {
+      const root = document.createElement('div');
+      root.setAttribute('aria-label', 'AI 연결 점검 결과');
+      const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+      const payload = isRecord(input) ? input : {};
+      const appendText = (parent, tag, value, state) => {
+        const node = document.createElement(tag);
+        node.textContent = value;
+        if (state) node.setAttribute('data-state', state);
+        parent.append(node);
+        return node;
+      };
+      const scalarText = (value) => {
+        if (typeof value === 'string' && value.trim()) return value;
+        if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+        return null;
+      };
+      const redact = (value) => {
+        const text = typeof value === 'string' ? value : null;
+        if (text === null) return null;
+        return /(^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}|\bbearer\s+\S+|token=|key=|password|secret/i.test(text) ? '[가림]' : text;
+      };
+      const received = (value) => {
+        if (typeof value === 'boolean') return String(value);
+        const text = scalarText(value);
+        return text === null ? '없음' : (redact(text.slice(0, 40)) ?? '없음');
+      };
+      const mode = payload.mode ?? (isRecord(payload.meta) ? payload.meta.mode : undefined);
+      let modeLabel;
+      if (mode === 'demo') modeLabel = '예제 자료(demo)';
+      else if (mode === 'disconnected') modeLabel = '연결 없음(disconnected)';
+      else if (mode === 'connected') modeLabel = '실제 연결(connected)';
+      else if (mode === 'unknown') modeLabel = '확인 불가(unknown)';
+      else modeLabel = `확인 불가(unknown) · 받은 값: ${received(mode)}`;
+      appendText(root, 'p', `연결 모드: ${modeLabel}`);
+      appendText(root, 'p', '이 칸은 앱 서버를 거친 앱 안의 AI 연결 점검 결과입니다 · 워크벤치 수업용 AI나 ALEPH 과제 판정 AI와는 다른 연결입니다');
+
+      const status = payload.status;
+      if (status === 'idle') {
+        appendText(root, 'p', 'AI 연결 점검 전(idle)', 'idle');
+        return root;
+      }
+      if (status === 'loading') {
+        appendText(root, 'p', 'AI 연결 점검 중(loading)', 'loading');
+        return root;
+      }
+      if (status === 'cancelled') {
+        appendText(root, 'p', 'AI 연결 점검 취소됨(cancelled) · 이전 결과는 현재 결과가 아닙니다', 'cancelled');
+        appendText(root, 'p', '다시 점검은 점검 버튼(「AI 연결 점검」 또는 「현재 API 연결 점검」)을 직접 누르세요 · 자동으로 다시 점검하지 않습니다');
+        return root;
+      }
+      const error = isRecord(payload.error) ? payload.error : {};
+      const rawErrorCode = typeof error.code === 'string' && error.code.trim() ? error.code.trim() : null;
+      const shownCode = rawErrorCode === null
+        ? '코드 없음'
+        : (/^[A-Za-z0-9_.:-]{1,80}$/.test(rawErrorCode) ? rawErrorCode : (redact(rawErrorCode.slice(0, 80)) ?? '코드 없음'));
+      const firstLine = typeof error.message === 'string' ? (error.message.split(/\r?\n/)[0] ?? '') : '';
+      const message = firstLine.trim() ? (redact(firstLine.slice(0, 300)) ?? '원인 확인 불가') : '원인 확인 불가';
+      const codeGroups = {
+        provisioning: ['ON_AI_PROVISIONING_PENDING', 'ON_AI_TRANSPORT_PENDING', 'ON_AI_AUTHORIZATION_CHANGED', 'ON_AI_TEST_TRANSPORT_ONLY'],
+        auth: ['WB_CLCO_AUTH_REQUIRED', 'WB_CLCO_INVALID_TOKEN'],
+        blocked: ['WB_CLCO_ACCESS_BLOCKED'],
+        limit: ['WB_CLCO_COHORT_BUDGET_EXHAUSTED', 'WB_CLCO_LIMIT_REACHED'],
+        hours: ['WB_CLCO_SESSION_CLOSED'],
+        rate: ['WB_CLCO_RATE_LIMITED'],
+        timeout: ['WB_CLCO_TIMEOUT'],
+        network: ['WB_CLCO_NETWORK_ERROR', 'WB_CLCO_SERVER_UNAVAILABLE', 'WB_CLCO_REQUEST_FAILED'],
+        cancelled: ['WB_CLCO_CANCELLED'],
+        model: ['ON_AI_MODEL_LIST_EMPTY'],
+        contract: ['CONTRACT_MISMATCH', 'ENGINE_RESULT_UNVERIFIED'],
+      };
+      const category = () => {
+        if (rawErrorCode !== null) {
+          for (const [name, codes] of Object.entries(codeGroups)) {
+            if (codes.includes(rawErrorCode)) return name;
+          }
+        }
+        const text = `${rawErrorCode ?? ''} ${firstLine}`.toLowerCase();
+        if (/cancel|취소/.test(text)) return 'cancelled';
+        if (/timeout|timed out|시간 초과/.test(text)) return 'timeout';
+        if (/rate.?limit|too many|요청 제한/.test(text)) return 'rate';
+        if (/network|네트워크|연결할 수 없/.test(text)) return 'network';
+        if (/provision|권한 준비/.test(text)) return 'provisioning';
+        if (/budget|usage|quota|사용량|한도/.test(text)) return 'limit';
+        if (/session closed|이용 시간|운영 시간/.test(text)) return 'hours';
+        if (/model|모델/.test(text)) return 'model';
+        if (/unauthori|auth|인증/.test(text)) return 'auth';
+        if (/forbidden|blocked|접근 제한|권한이 없/.test(text)) return 'blocked';
+        return 'unknown';
+      };
+
+      if (status === 'error') {
+        const reason = category();
+        const head = reason === 'cancelled'
+          ? 'AI 연결 점검 취소됨'
+          : reason === 'timeout' ? 'AI 연결 점검 시간 초과(timeout)' : 'AI 연결 점검 실패';
+        appendText(root, 'p', `${head}(error, ${shownCode}): ${message}`, 'error');
+        const guide = {
+          provisioning: '원인: 앱 권한 준비 중 · 학생 설정 오류가 아닙니다 · 담당자에게 계정 연결과 앱 권한 확인을 요청하세요',
+          auth: '원인: 인증 실패 · 보호 현황에서 계정 연결을 다시 확인하고, 계속되면 담당자에게 확인을 요청하세요',
+          blocked: '원인: 접근 제한 · 계정 연결을 다시 확인하고 담당자에게 권한을 확인하세요',
+          limit: '원인: 반 사용량 또는 이용 한도 초과 · 담당자에게 확인하세요',
+          hours: '원인: 이용 시간이 아님 · 이용 가능한 시간을 확인하세요',
+          rate: '원인: 요청 제한(짧은 시간에 요청이 많음) · 잠시 뒤 직접 다시 점검하세요',
+          timeout: '원인: 시간 초과(timeout) · 응답이 늦어 점검이 끝났습니다 · 잠시 뒤 직접 다시 점검하세요',
+          network: '원인: 네트워크 또는 서버 연결 문제 · 잠시 뒤 직접 다시 점검하세요',
+          cancelled: '원인: 취소됨 · 이전 결과는 현재 결과가 아닙니다',
+          model: '원인: 쓸 수 있는 모델 없음 · 담당자에게 모델 허용 설정 확인을 요청하세요',
+          contract: '원인: 확인 불가(unknown) · 응답 형식이 계약과 다름 · 성공으로 보지 않습니다 · 담당자에게 계정 연결과 앱 권한 확인을 요청하세요',
+          unknown: '원인: 확인 불가(unknown) · 담당자에게 계정 연결과 앱 권한 확인을 요청하세요',
+        };
+        appendText(root, 'p', guide[reason] ?? guide.unknown);
+        appendText(root, 'p', '이전 점검 결과는 현재 결과가 아니므로 표시하지 않습니다');
+        appendText(root, 'p', '다시 점검은 점검 버튼(「AI 연결 점검」 또는 「현재 API 연결 점검」)을 직접 누르세요 · 자동으로 다시 점검하지 않습니다');
+        return root;
+      }
+      if (status !== 'ok') {
+        const receivedStatus = received(status);
+        appendText(root, 'p', `확인 불가(unknown) · 받은 status: ${receivedStatus}`, 'unknown');
+        return root;
+      }
+
+      const data = isRecord(payload.data) ? payload.data : {};
+      const audience = data.audienceAuthorization;
+      if (audience === 'test') appendText(root, 'p', '시험 연결 점검(test)');
+      else if (audience === 'verified') appendText(root, 'p', '앱 권한 확인 후 점검(verified)');
+      else appendText(root, 'p', `확인 불가(unknown) · 받은 값: ${received(audience)}`, 'unknown');
+
+      if (data.transportChecked === true) appendText(root, 'p', '전송 경로 확인: 예(transportChecked: true)');
+      else appendText(root, 'p', `확인 불가(unknown) · transportChecked: ${received(data.transportChecked)}`, 'unknown');
+      const modelCount = typeof data.modelCount === 'number' && Number.isFinite(data.modelCount)
+        ? String(data.modelCount)
+        : '확인 불가';
+      appendText(root, 'p', `사용 가능 모델 수: ${modelCount}`);
+      const checkedAt = payload.checkedAt ?? data.checkedAt ?? (isRecord(payload.meta) ? payload.meta.checkedAt : undefined);
+      appendText(root, 'p', `점검 시각: ${scalarText(checkedAt) ?? '확인 불가'}`);
+      appendText(root, 'p', '사건 설명은 아직 실행하지 않았습니다');
+      appendText(root, 'p', '연결 점검 결과일 뿐이며 사건 설명 결과가 아닙니다');
+      if (payload.explanationAccepted === false) appendText(root, 'p', '사건 설명 수락: 아니요(explanationAccepted: false)');
+      else if (payload.explanationAccepted === true) appendText(root, 'p', '사건 설명 수락: 예(explanationAccepted: true)');
+      else appendText(root, 'p', '사건 설명 수락: 확인 불가(unknown)', 'unknown');
+      if (typeof data.help === 'string') {
+        const help = redact(data.help.slice(0, 300)) ?? '';
+        appendText(root, 'p', `도움말: ${help}`);
+      }
+      return root;
+    },
+    renderExplanation(input) {
+      const root = document.createElement('div');
+      root.setAttribute('aria-label', '사건 설명');
+      const appendText = (value, state) => {
+        const node = document.createElement('p');
+        node.textContent = value;
+        if (state) node.setAttribute('data-state', state);
+        root.append(node);
+        return node;
+      };
+      const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+      const scalarText = (value) => {
+        if (typeof value === 'string' && value.trim()) return value;
+        if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+        return null;
+      };
+      const redact = (value) => {
+        if (typeof value !== 'string') return null;
+        return /(^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}|\bbearer\s+\S+|token=|key=|password|secret/i.test(value) ? '[가림]' : value;
+      };
+      const safeCode = (value) => {
+        if (typeof value !== 'string' || !value.trim()) return '코드 없음';
+        const text = value.trim();
+        return /^[A-Za-z0-9_.:-]{1,80}$/.test(text) ? text : (redact(text.slice(0, 80)) ?? '코드 없음');
+      };
+      const safeMessage = (value) => {
+        if (typeof value !== 'string') return '원인 확인 불가';
+        const firstLine = value.split(/\r?\n/)[0] ?? '';
+        if (!firstLine.trim()) return '원인 확인 불가';
+        return redact(firstLine.slice(0, 300)) ?? '원인 확인 불가';
+      };
+      const payload = isRecord(input) ? input : null;
+      const explanation = payload && isRecord(payload.explanation) ? payload.explanation : null;
+      if (!payload || !explanation) {
+        appendText('사건 설명 확인 불가(unknown) · 입력 없음', 'unknown');
+        appendText('AI 제안은 자동 실행하지 않습니다');
+        return root;
+      }
+      const status = explanation.status;
+      if (status === 'idle') {
+        appendText('사건 설명 요청 전(idle) · 보안 기록에서 사건을 골라 설명을 요청하세요', 'idle');
+      } else if (status === 'loading') {
+        appendText('사건 설명 생성 중(loading)', 'loading');
+      } else if (status === 'error') {
+        const error = isRecord(explanation.error) ? explanation.error : {};
+        const code = safeCode(error.code);
+        appendText(`사건 설명 실패(error, ${code}): ${safeMessage(error.message)} · 기록은 그대로입니다`, 'error');
+        if (error.code === 'WB_CLCO_CANCELLED') appendText('취소됨 · 이전 설명은 현재 결과가 아닙니다', 'error');
+        if (error.code === 'ON_AI_TEST_TRANSPORT_ONLY') appendText('시험 연결만 확인된 상태라 실제 사건 설명은 실행되지 않았습니다 · 담당자에게 앱 권한 확인을 요청하세요', 'error');
+      } else if (status === 'ok') {
+        const event = isRecord(payload.event) ? payload.event : {};
+        const eventId = scalarText(event.id);
+        const data = isRecord(explanation.data) ? explanation.data : {};
+        const targetIds = ['eventId', 'incidentId'].filter((key) => Object.hasOwn(data, key) && data[key] !== undefined && data[key] !== null && data[key] !== '');
+        const mismatch = eventId !== null && targetIds.some((key) => scalarText(data[key]) !== eventId);
+        if (mismatch) {
+          appendText('확인 불가(unknown): 선택한 사건과 설명 대상 사건이 다름', 'unknown');
+        } else if (eventId === null) {
+          appendText('확인 불가(unknown): 사건 ID 없음', 'unknown');
+        } else {
+          root.setAttribute('data-student-explanation-event', eventId);
+          appendText(`사건 ID: ${eventId}`);
+          const summary = scalarText(data.summary);
+          appendText(`AI 설명 요약: ${summary === null ? '확인 불가' : (redact(summary.slice(0, 1500)) ?? '확인 불가')}`);
+          const checkedAt = payload.checkedAt ?? explanation.checkedAt ?? (isRecord(explanation.meta) ? explanation.meta.checkedAt : undefined);
+          appendText(`설명 시각: ${scalarText(checkedAt) ?? '확인 불가'}`);
+        }
+      } else {
+        const rawStatus = scalarText(status);
+        const shown = rawStatus === null ? '없음' : (redact(rawStatus.slice(0, 40)) ?? '없음');
+        appendText(`확인 불가(unknown) · 받은 status: ${shown}`, 'unknown');
+      }
+      appendText('AI 제안은 자동 실행하지 않습니다');
+      return root;
+    },
     renderAction() { return '학생 구현 대기: 현재 사건·조치·실제 대상·사람 확인·ACK와 원천 효과·unknown을 구분하세요.'; },
   };
 }
