@@ -183,10 +183,6 @@ export function createStudentView() {
       const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
       const payload = isRecord(input) ? input : null;
       const rawCode = (value) => typeof value === 'string' && value.trim() ? value.slice(0, 40) : null;
-      const unknownValue = (value) => {
-        const raw = rawCode(value);
-        return raw === null ? '확인 불가(값 없음)' : `확인 불가(받은 값: ${raw})`;
-      };
       const displayValue = (value) => {
         if (typeof value === 'string' && value.trim()) return value;
         if (typeof value === 'number' && Number.isFinite(value)) return String(value);
@@ -195,15 +191,16 @@ export function createStudentView() {
       const mode = payload
         ? (payload.mode ?? (isRecord(payload.meta) ? payload.meta.mode : undefined))
         : undefined;
-      let modeLabel = unknownValue(mode);
+      let modeLabel;
       if (mode === 'connected') modeLabel = '실제 연결(connected)';
       else if (mode === 'demo') modeLabel = '예제 자료(demo)';
       else if (mode === 'disconnected') modeLabel = '연결 없음(disconnected)';
       else if (mode === 'unknown') modeLabel = '확인 불가(unknown)';
+      else modeLabel = `확인 불가(unknown) · 받은 값: ${rawCode(mode) ?? '없음'}`;
       appendText(root, 'p', `연결 모드: ${modeLabel}`);
 
       if (!payload) {
-        appendText(root, 'p', '확인 불가(값 없음)', 'unknown');
+        appendText(root, 'p', '확인 불가(unknown) · 입력 없음 · 허용되지 않음', 'unknown');
         return root;
       }
 
@@ -224,16 +221,15 @@ export function createStudentView() {
           ? error.message
           : '원인 확인 불가';
         if (error.code === 'CONTRACT_MISMATCH' || error.code === 'ENGINE_RESULT_UNVERIFIED') {
-          appendText(root, 'p', `확인 불가: 응답 형식이 계약과 다름(error, ${code}): ${message} · 허용도 거부도 아닙니다`, 'unknown');
+          appendText(root, 'p', `확인 불가(unknown): 응답 형식이 계약과 다름(error, ${code}): ${message} · 허용도 거부도 아닙니다`, 'unknown');
         } else {
           appendText(root, 'p', `요청 실패(error, ${code}): ${message} · 접근 거부 판정이 아닙니다`, 'error');
         }
         return root;
       }
       if (status !== 'ok') {
-        appendText(root, 'p', status === undefined || status === null || status === ''
-          ? '확인 불가(값 없음)'
-          : unknownValue(status), 'unknown');
+        const receivedStatus = rawCode(status) ?? '없음';
+        appendText(root, 'p', `확인 불가(unknown) · 받은 status: ${receivedStatus} · 허용되지 않음`, 'unknown');
         return root;
       }
 
@@ -247,7 +243,7 @@ export function createStudentView() {
       const mismatch = hasIdentifier(payload.appId) && hasTargetAppId && payload.appId !== data.appId;
 
       if (mismatch) {
-        appendText(root, 'p', '확인 불가: 선택한 앱과 판정 대상 앱이 다름 · 허용되지 않음', 'mismatch');
+        appendText(root, 'p', '확인 불가(unknown): 선택한 앱과 판정 대상 앱이 다름 · 허용되지 않음', 'mismatch');
         appendText(root, 'p', `선택한 앱 ID: ${displayValue(selectedAppId)}`);
         appendText(root, 'p', `판정 대상 앱 ID: ${displayValue(data.appId)}`);
         return root;
@@ -266,10 +262,8 @@ export function createStudentView() {
         } else if (decision === 'unknown') {
           appendText(root, 'p', '판정: 확인 불가(unknown) · 허용되지 않음', 'unknown');
         } else {
-          const decisionLabel = decision === undefined || decision === null || decision === ''
-            ? '확인 불가(값 없음)'
-            : unknownValue(decision);
-          appendText(root, 'p', `판정: ${decisionLabel} · 허용되지 않음`, 'unknown');
+          const receivedDecision = rawCode(decision) ?? '없음';
+          appendText(root, 'p', `판정: 확인 불가(unknown) · 받은 값: ${receivedDecision} · 허용되지 않음`, 'unknown');
         }
       }
 
