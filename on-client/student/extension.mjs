@@ -1,6 +1,9 @@
 // 이 파일은 학생이 같은 프로젝트에서 이어서 구현합니다.
 // 제공 UI를 받은 것만으로 단계 완료를 인정하지 않습니다.
 let eventFilterState = { kind: 'all', appId: 'all', access: 'all' };
+// 20단계: 패키지 조회 요청과 응답을 연결하는 상태입니다. 표시 결과는 저장하지 않고, 지금 기다리는 요청이 있는지와 마지막으로 받아들인 응답의 식별값·조회 시각만 기억합니다.
+// phase: initial(아직 본 요청 없음) · loading(현재 요청 진행 중) · cancelled(취소함) · failed(실패함) · accepted(현재 요청의 응답을 받아들임)
+let vulnerabilityLookupState = { phase: 'initial', acceptedKey: null, acceptedAt: null };
 
 export function createStudentView() {
   return {
@@ -849,15 +852,18 @@ export function createStudentView() {
       // 조회 전·조회 중·실패·취소에는 이전 표를 그리지 않습니다(호출마다 새로 그림).
       const status = payload.status;
       if (status === 'idle') {
+        vulnerabilityLookupState = { phase: 'initial', acceptedKey: null, acceptedAt: null };
         appendText(root, 'p', `조회 전(idle) · 아직 조회하지 않았습니다 · ${notClean}`, 'idle');
         return root;
       }
       if (status === 'loading') {
+        vulnerabilityLookupState = { ...vulnerabilityLookupState, phase: 'loading' };
         appendText(root, 'p', '조회 중(loading) · 이전 결과는 현재 결과가 아니므로 표시하지 않습니다', 'loading');
         return root;
       }
       if (status === 'error') {
         const error = isRecord(payload.error) ? payload.error : {};
+        vulnerabilityLookupState = { ...vulnerabilityLookupState, phase: error.code === 'CANCELLED' ? 'cancelled' : 'failed' };
         if (error.code === 'CANCELLED') {
           appendText(root, 'p', `조회 취소됨(error, CANCELLED): ${safeMessage(error.message)}`, 'cancelled');
           appendText(root, 'p', `취소한 조회는 결과가 아닙니다 · ${notClean} · 늦게 도착한 응답은 표시하지 않습니다`);
@@ -878,6 +884,26 @@ export function createStudentView() {
         appendText(root, 'p', `확인 불가(unknown) · 조회 결과 형식이 아님 · ${notClean}`, 'unknown');
         return root;
       }
+
+      // 늦은 응답 차단: 현재 진행 중인 요청의 응답이거나, 이미 받아들인 같은 응답을 다시 그릴 때만 표시합니다.
+      // 취소·실패 뒤에 새 조회(loading) 없이 도착한 응답, 이미 받아들인 결과보다 조회 시각이 이른 응답은 늦은(이전) 응답으로 보고 표시하지 않습니다.
+      const responseCheckedAt = plainText(data.checkedAt ?? (isRecord(payload.meta) ? payload.meta.checkedAt : undefined), 40);
+      const responseTime = responseCheckedAt === null ? Number.NaN : Date.parse(responseCheckedAt);
+      const responseKey = [responseCheckedAt ?? '', plainText(data.lockfileHash, 128) ?? '', typeof data.status === 'string' ? data.status : '', Array.isArray(data.packages) ? data.packages.length : -1].join('|');
+      const lookup = vulnerabilityLookupState;
+      const sameAccepted = lookup.phase === 'accepted' && lookup.acceptedKey === responseKey;
+      const olderThanAccepted = Number.isFinite(lookup.acceptedAt) && Number.isFinite(responseTime) && responseTime < lookup.acceptedAt;
+      const expected = lookup.phase === 'loading' || lookup.phase === 'initial';
+      if (!sameAccepted && (!expected || olderThanAccepted)) {
+        const reason = lookup.phase === 'cancelled'
+          ? '취소한 조회 뒤에 도착한 응답'
+          : lookup.phase === 'failed' ? '실패한 조회 뒤에 도착한 응답' : '이미 표시한 결과보다 이전 시각의 응답';
+        appendText(root, 'p', `늦게 도착한 응답이라 표시하지 않습니다(stale) · ${reason} · 받은 조회 시각: ${responseCheckedAt ?? '없음'}`, 'stale');
+        appendText(root, 'p', `이 응답은 현재 조회 결과가 아닙니다 · ${notClean}`);
+        appendText(root, 'p', retryGuide);
+        return root;
+      }
+      vulnerabilityLookupState = { phase: 'accepted', acceptedKey: responseKey, acceptedAt: Number.isFinite(responseTime) ? responseTime : lookup.acceptedAt };
 
       // 전체 조회 상태
       const scanStatus = data.status;
