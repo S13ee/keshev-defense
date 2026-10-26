@@ -1206,6 +1206,187 @@ export function createStudentView() {
       appendNotExecuted();
       return root;
     },
-    renderAction() { return '학생 구현 대기: 현재 사건·조치·실제 대상·사람 확인·ACK와 원천 효과·unknown을 구분하세요.'; },
+    renderAction(input) {
+      const root = document.createElement('div');
+      root.setAttribute('aria-label', '조치 상태');
+      const appendText = (parent, tag, value, state) => {
+        const node = document.createElement(tag);
+        node.textContent = value;
+        if (state) node.setAttribute('data-state', state);
+        parent.append(node);
+        return node;
+      };
+      const isRecord = (value) => value !== null && typeof value === 'object' && !Array.isArray(value);
+      const scalarText = (value) => {
+        if (typeof value === 'string' && value.trim()) return value;
+        if (typeof value === 'number' && Number.isFinite(value)) return String(value);
+        return null;
+      };
+      const redact = (value) => {
+        if (typeof value !== 'string') return null;
+        return /(^|[^A-Za-z0-9])sk-[A-Za-z0-9_-]{16,}|\bbearer\s+\S+|token=|key=|password|secret/i.test(value) ? '[가림]' : value;
+      };
+      const safeText = (value, max) => {
+        const text = scalarText(value);
+        return text === null ? null : (redact(text.slice(0, max)) ?? null);
+      };
+      const received = (value) => {
+        if (typeof value === 'boolean') return String(value);
+        return safeText(value, 40) ?? '없음';
+      };
+      const safeCode = (value) => {
+        if (typeof value !== 'string' || !value.trim()) return '코드 없음';
+        const text = value.trim();
+        return /^[A-Za-z0-9_.:-]{1,80}$/.test(text) ? text : (redact(text.slice(0, 80)) ?? '코드 없음');
+      };
+      const safeMessage = (value) => {
+        if (typeof value !== 'string') return null;
+        const firstLine = value.split(/\r?\n/)[0] ?? '';
+        if (!firstLine.trim()) return null;
+        return redact(firstLine.slice(0, 300));
+      };
+      const timeLabel = (value) => {
+        const original = safeText(value, 40);
+        if (original === null) return '확인 불가(받은 값: 없음)';
+        const milliseconds = Date.parse(original);
+        if (!Number.isFinite(milliseconds)) return `확인 불가(받은 값: ${original})`;
+        const korean = new Date(milliseconds + 9 * 60 * 60 * 1000);
+        if (!Number.isFinite(korean.getTime())) return `확인 불가(받은 값: ${original})`;
+        const pad = (number, width = 2) => String(number).padStart(width, '0');
+        return `${original} (한국 시각 ${pad(korean.getUTCFullYear(), 4)}-${pad(korean.getUTCMonth() + 1)}-${pad(korean.getUTCDate())} ${pad(korean.getUTCHours())}:${pad(korean.getUTCMinutes())}:${pad(korean.getUTCSeconds())})`;
+      };
+      const rerequestGuide = '결과는 제공 화면의 「원천 결과만 재조회」(문서 이름 「연동 시스템 결과만 재조회」)로만 다시 조회하세요 · 집행을 다시 요청하지 마세요';
+
+      const payload = isRecord(input) ? input : {};
+      const status = payload.status;
+      const event = isRecord(payload.event) ? payload.event : null;
+      const eventId = event ? scalarText(event.id) : null;
+      const actionId = safeText(payload.actionId, 80);
+      const target = isRecord(payload.target) ? payload.target : null;
+      const receipt = isRecord(payload.receipt) ? payload.receipt : null;
+      const observation = isRecord(payload.observation)
+        ? payload.observation
+        : (receipt && isRecord(receipt.observation) ? receipt.observation : null);
+      const requestId = receipt ? safeText(receipt.requestId, 80) : null;
+
+      // 현재 사건·조치와 서버 접수 기록이 다르면 이전 결과로 보고 표시하지 않습니다.
+      const bindingProblems = [];
+      if (receipt) {
+        const receiptEventId = scalarText(receipt.eventId);
+        const receiptActionId = scalarText(receipt.actionId);
+        if (receiptEventId !== null && eventId !== null && receiptEventId !== eventId) bindingProblems.push(`접수 기록의 사건(${received(receiptEventId)})이 현재 사건(${received(eventId)})과 다름`);
+        if (receiptActionId !== null && actionId !== null && receiptActionId !== actionId) bindingProblems.push(`접수 기록의 조치(${received(receiptActionId)})가 현재 조치(${received(actionId)})와 다름`);
+      }
+
+      appendText(root, 'p', '이 칸에는 집행 버튼이 없습니다 · 조치 준비·집행·결과 재조회·취소는 제공 화면 버튼으로 사람이 직접 합니다 · 학생 화면은 요청을 보내지 않습니다');
+
+      const known = ['idle', 'loading', 'prepared', 'executing', 'pending', 'succeeded', 'denied', 'failed', 'unknown', 'error', 'expired'];
+      if (!known.includes(status)) {
+        appendText(root, 'p', `결과 불명(unknown) · 받은 status: ${received(status)} · 성공으로도 효과 없음으로도 판단하지 않습니다`, 'unknown');
+        appendText(root, 'p', rerequestGuide);
+        return root;
+      }
+      if (bindingProblems.length > 0) {
+        appendText(root, 'p', '확인 불가(unknown): 현재 사건·조치와 서버 접수 기록이 맞지 않아 이 결과를 표시하지 않습니다', 'unknown');
+        const list = document.createElement('ul');
+        for (const problem of bindingProblems) appendText(list, 'li', `이유: ${problem}`);
+        root.append(list);
+        appendText(root, 'p', '결과 불명으로 봅니다 · 성공으로도 효과 없음으로도 판단하지 않습니다');
+        appendText(root, 'p', rerequestGuide);
+        return root;
+      }
+
+      // 상태 문장
+      const effectConfirmed = status === 'succeeded'
+        && observation !== null
+        && observation.effectApplied === true
+        && safeText(observation.observedAt, 40) !== null
+        && receipt !== null
+        && safeText(receipt.receiptId, 80) !== null
+        && receipt.superseded !== true
+        && (receipt.status === undefined || receipt.status === 'succeeded');
+      const message = safeMessage(payload.message);
+      if (status === 'idle') {
+        appendText(root, 'p', '아직 미실행(idle) · 조치를 준비하거나 집행하지 않았습니다', 'idle');
+        if (event && Array.isArray(event.supportedActions) && event.supportedActions.length === 0) {
+          appendText(root, 'p', '이 기록은 연동 시스템이 지원하는 조치가 없어 조치 준비 버튼이 나오지 않습니다(정상) · AI 제안은 참고 정보이며 실행되지 않습니다');
+        } else {
+          appendText(root, 'p', 'AI 제안만으로는 실행되지 않습니다 · 제공 화면에서 「조치 준비」를 누르고 사람이 확인해야 서버에 전달됩니다');
+        }
+      } else if (status === 'loading') {
+        appendText(root, 'p', '조치 준비 또는 결과 조회 중(loading) · 결과가 아직 확인되지 않았습니다(완료 아님)', 'loading');
+      } else if (status === 'prepared') {
+        appendText(root, 'p', '준비됨·미실행(prepared) · 아직 서버에 집행을 요청하지 않았습니다', 'prepared');
+        appendText(root, 'p', `확인 기한: ${timeLabel(payload.confirmationExpiresAt)}`);
+        appendText(root, 'p', '아래 사건·근거·조치·실제 대상을 확인한 뒤, 기한 안에 제공 화면의 「대상과 조치를 확인했으며 집행합니다」를 사람이 직접 눌러야 전달됩니다');
+      } else if (status === 'executing') {
+        appendText(root, 'p', '서버에 전달 중(executing) · 결과가 아직 없습니다(완료 아님)', 'executing');
+      } else if (status === 'pending') {
+        appendText(root, 'p', '서버 접수·처리 중(pending) · 서버가 요청을 받았다는 응답(ACK)일 뿐 연동 시스템의 효과는 아직 관측되지 않았습니다 · 결과 확인 전(완료 아님)', 'pending');
+        appendText(root, 'p', rerequestGuide);
+      } else if (status === 'succeeded') {
+        if (effectConfirmed) {
+          appendText(root, 'p', '효과 확인(succeeded) · 서버가 연동 시스템에서 조회해 관측한 결과입니다', 'succeeded');
+          appendText(root, 'p', `관측 시각: ${timeLabel(observation.observedAt)}`);
+          appendText(root, 'p', 'effectApplied: true');
+          appendText(root, 'p', `receiptId: ${safeText(receipt.receiptId, 80)}`);
+        } else {
+          appendText(root, 'p', `결과 불명(unknown) · 받은 status: succeeded · 효과 관측(effectApplied: true·관측 시각·receiptId)이 확인되지 않아 효과가 관측된 결과로 표시하지 않습니다 · effectApplied: ${observation ? received(observation.effectApplied) : '없음'}`, 'unknown');
+          appendText(root, 'p', '성공으로도 효과 없음으로도 판단하지 않습니다');
+          appendText(root, 'p', rerequestGuide);
+        }
+      } else if (status === 'denied') {
+        appendText(root, 'p', `연동 시스템 거절(denied): ${message ?? '원인 확인 불가'}`, 'denied');
+        appendText(root, 'p', '조치 효과는 확인되지 않았습니다');
+      } else if (status === 'failed') {
+        appendText(root, 'p', `연동 시스템 처리 실패(failed): ${message ?? '원인 확인 불가'}`, 'failed');
+        appendText(root, 'p', '조치 효과는 확인되지 않았습니다');
+      } else if (status === 'unknown') {
+        appendText(root, 'p', '결과 불명(unknown) · 성공으로도 효과 없음으로도 판단하지 않습니다', 'unknown');
+        if (receipt && receipt.superseded === true) appendText(root, 'p', '다른 요청으로 대체된 접수 기록입니다(superseded: true)');
+        appendText(root, 'p', rerequestGuide);
+      } else if (status === 'expired') {
+        appendText(root, 'p', '확인 기한 지남(expired) · 집행 요청을 보내지 않았습니다 · AI 제안에서 「조치 준비」를 다시 누르세요', 'expired');
+        appendText(root, 'p', `확인 기한: ${timeLabel(payload.confirmationExpiresAt)}`);
+      } else if (status === 'error') {
+        const error = isRecord(payload.error) ? payload.error : {};
+        appendText(root, 'p', `요청 처리 안 됨(error, ${safeCode(error.code)}): ${safeMessage(error.message) ?? '원인 확인 불가'}`, 'error');
+        appendText(root, 'p', '조치 효과는 확인되지 않았습니다 · 자동으로 다시 요청하지 않습니다');
+      }
+      if (message && !['denied', 'failed'].includes(status)) appendText(root, 'p', `제공 화면 안내: ${message}`);
+
+      // 받은 범위의 식별자
+      appendText(root, 'h4', '현재 조치 대상');
+      if (eventId !== null) {
+        root.setAttribute('data-student-action-event', eventId);
+        appendText(root, 'p', `사건 ID(event.id): ${safeText(eventId, 80)}`);
+        if (Array.isArray(event.evidence)) {
+          const ids = event.evidence.map((row) => (isRecord(row) ? safeText(row.id, 80) : null)).filter((id) => id !== null);
+          appendText(root, 'p', `근거 ID: ${ids.length > 0 ? ids.join(', ') : '없음'}`);
+        }
+      } else {
+        appendText(root, 'p', '사건 ID: 없음 · 보안 기록에서 사건을 고르고 AI 제안에서 조치를 준비하세요');
+      }
+      if (actionId !== null) appendText(root, 'p', `조치(actionId): ${actionId}`);
+      if (target) {
+        appendText(root, 'p', `실제 대상(target.id): ${safeText(target.id, 80) ?? '확인 불가'}`);
+        appendText(root, 'p', `대상 세대(target.generation): ${safeText(target.generation, 40) ?? '확인 불가'}`);
+      }
+      if (receipt) {
+        if (requestId !== null) {
+          root.setAttribute('data-student-action-request', requestId);
+          appendText(root, 'p', `requestId: ${requestId}`);
+        }
+        const receiptId = safeText(receipt.receiptId, 80);
+        if (receiptId !== null && !effectConfirmed) appendText(root, 'p', `receiptId: ${receiptId}`);
+        const version = safeText(receipt.version, 20);
+        if (version !== null) appendText(root, 'p', `version: ${version}`);
+        if (receipt.replayed === true) appendText(root, 'p', '같은 요청에 대한 기존 접수 결과를 다시 받음(replayed: true) · 새로 집행한 것이 아닙니다');
+        else if (receipt.replayed === false) appendText(root, 'p', 'replayed: false');
+      }
+
+      appendText(root, 'p', '「조치 화면 취소」는 화면만 닫으며 이미 서버에 전달된 조치 효과를 되돌리지 않습니다');
+      return root;
+    },
   };
 }
