@@ -147,9 +147,10 @@ export function createStudentView({ api, onChange } = {}) {
       fw: it.firewall.ok ? { ...it.firewall.profiles } : null,
       ev: it.events.ok ? { w: it.events.warnings, e: it.events.errors, tr: it.events.truncated } : null,
     };
-    if (pcHistory.length && pcHistory[pcHistory.length - 1].t === entry.t) return;
+    if (pcHistory.length && pcHistory[pcHistory.length - 1].t === entry.t) return null;
     pcHistory = [...pcHistory, entry].slice(-HISTORY_LIMIT);
     saveHistory();
+    return entry;
   };
 
   // ---------- 마지막 총공세 3일차: 지난 점검과 비교해 바뀐 것 찾기 ----------
@@ -164,6 +165,7 @@ export function createStudentView({ api, onChange } = {}) {
     const full = kstText(iso);
     return full === '시각 확인 불가' ? full : full.slice(5, 16).replace('-', '/');
   };
+  const PICKS = { cpu: (e) => e.cpu, memory: (e) => e.mem, disk: (e) => e.disk, network: (e) => e.net, firewall: (e) => e.fw, events: (e) => e.ev };
   const detectChanges = (currentT) => {
     const idx = pcHistory.map((entry) => entry.t).lastIndexOf(currentT);
     if (idx < 0) return { compared: false, list: [] };
@@ -171,7 +173,7 @@ export function createStudentView({ api, onChange } = {}) {
     const prev = pcHistory.slice(0, idx);
     if (!prev.length) return { compared: false, list: [] };
     const list = [];
-    const add = (item, kind, title, evidence, hint) => list.push({ item, kind, title, evidence, hint });
+    const add = (item, kind, title, evidence, hint, key = null, limit = null) => list.push({ item, kind, title, evidence, hint, key, limit });
     const lastWith = (pick) => {
       for (let i = prev.length - 1; i >= 0; i -= 1) {
         const value = pick(prev[i]);
@@ -182,11 +184,10 @@ export function createStudentView({ api, onChange } = {}) {
     const numbers = (from, pick) => from.map(pick).filter((v) => typeof v === 'number' && Number.isFinite(v)).slice(-BASELINE_WINDOW);
 
     // 이전엔 읽혔는데 이번엔 읽지 못한 항목
-    const picks = { cpu: (e) => e.cpu, memory: (e) => e.mem, disk: (e) => e.disk, network: (e) => e.net, firewall: (e) => e.fw, events: (e) => e.ev };
-    for (const [item, pick] of Object.entries(picks)) {
+    for (const [item, pick] of Object.entries(PICKS)) {
       if (pick(now) != null) continue;
       const last = lastWith(pick);
-      if (last) add(item, 'check', `${PC_LABELS[item]} 값을 이번에 읽지 못함`, `이전(${shortTime(last.t)}) 읽힘 → 지금 확인 불가`, '「내 PC 점검」을 다시 눌러 보고, 계속되면 권한이나 Windows 서비스 상태를 확인하세요');
+      if (last) add(item, 'check', `${PC_LABELS[item]} 값을 이번에 읽지 못함`, `이전(${shortTime(last.t)}) 읽힘 → 지금 확인 불가`, '「내 PC 점검」을 다시 눌러 보고, 계속되면 권한이나 Windows 서비스 상태를 확인하세요', `read:${item}`);
     }
 
     // 방화벽: 평소 범위 없이 바로 비교
@@ -195,7 +196,7 @@ export function createStudentView({ api, onChange } = {}) {
       for (const name of ['Domain', 'Private', 'Public']) {
         const before = fwLast.value[name];
         const after = now.fw[name];
-        if (before === true && after === false) add('firewall', 'todo', `방화벽 ${name} 프로필이 꺼짐`, `이전(${shortTime(fwLast.t)}) 켜짐 → 지금 꺼짐`, 'Windows 보안 › 방화벽 및 네트워크 보호에서 직접 확인하세요 · 이 앱은 설정을 바꾸지 않습니다');
+        if (before === true && after === false) add('firewall', 'todo', `방화벽 ${name} 프로필이 꺼짐`, `이전(${shortTime(fwLast.t)}) 켜짐 → 지금 꺼짐`, 'Windows 보안 › 방화벽 및 네트워크 보호에서 직접 확인하세요 · 이 앱은 설정을 바꾸지 않습니다', `fw:${name}`);
         if (before === false && after === true) add('firewall', 'note', `방화벽 ${name} 프로필이 다시 켜짐`, `이전(${shortTime(fwLast.t)}) 꺼짐 → 지금 켜짐`, '할 일 없음');
       }
     }
@@ -205,9 +206,9 @@ export function createStudentView({ api, onChange } = {}) {
       const values = numbers(prev, (e) => e.disk);
       const low = values.length ? Math.min(...values) : null;
       if (now.disk < RULE.DISK_FLOOR) {
-        add('disk', 'todo', `디스크 여유 공간이 ${RULE.DISK_FLOOR}% 미만`, `지금 ${now.disk.toFixed(1)}% 여유${low != null ? ` · 지난 점검 최저 ${low.toFixed(1)}% 여유` : ''}`, '필요 없는 큰 파일, 다운로드 폴더, 휴지통을 직접 확인하세요');
+        add('disk', 'todo', `디스크 여유 공간이 ${RULE.DISK_FLOOR}% 미만`, `지금 ${now.disk.toFixed(1)}% 여유${low != null ? ` · 지난 점검 최저 ${low.toFixed(1)}% 여유` : ''}`, '필요 없는 큰 파일, 다운로드 폴더, 휴지통을 직접 확인하세요', 'disk:floor');
       } else if (values.length >= BASELINE_MIN && now.disk < low - RULE.DISK_DROP) {
-        add('disk', 'todo', '디스크 여유가 평소보다 크게 줄었음', `평소(지난 ${values.length}회) 최저 ${low.toFixed(1)}% 여유 → 지금 ${now.disk.toFixed(1)}% 여유 (${(low - now.disk).toFixed(1)}%p 감소)`, '최근 설치하거나 내려받은 큰 파일을 직접 확인하세요');
+        add('disk', 'todo', '디스크 여유가 평소보다 크게 줄었음', `평소(지난 ${values.length}회) 최저 ${low.toFixed(1)}% 여유 → 지금 ${now.disk.toFixed(1)}% 여유 (${(low - now.disk).toFixed(1)}%p 감소)`, '최근 설치하거나 내려받은 큰 파일을 직접 확인하세요', 'disk:drop', low - RULE.DISK_DROP);
       }
     }
 
@@ -216,7 +217,7 @@ export function createStudentView({ api, onChange } = {}) {
       const values = numbers(prev, (e) => e.mem);
       if (values.length >= BASELINE_MIN) {
         const high = Math.max(...values);
-        if (now.mem > high + RULE.MEM_RISE) add('memory', 'todo', '메모리 사용이 평소보다 높음', `평소(지난 ${values.length}회) 최고 ${high.toFixed(1)}% → 지금 ${now.mem.toFixed(1)}% (${(now.mem - high).toFixed(1)}%p 높음)`, '작업 관리자(Ctrl+Shift+Esc) › 프로세스에서 메모리를 많이 쓰는 앱을 확인하세요');
+        if (now.mem > high + RULE.MEM_RISE) add('memory', 'todo', '메모리 사용이 평소보다 높음', `평소(지난 ${values.length}회) 최고 ${high.toFixed(1)}% → 지금 ${now.mem.toFixed(1)}% (${(now.mem - high).toFixed(1)}%p 높음)`, '작업 관리자(Ctrl+Shift+Esc) › 프로세스에서 메모리를 많이 쓰는 앱을 확인하세요', 'mem:high', high + RULE.MEM_RISE);
       }
     }
 
@@ -225,7 +226,7 @@ export function createStudentView({ api, onChange } = {}) {
       const values = numbers(prev, (e) => (pcIsRecord(e.ev) ? e.ev.e : null));
       if (values.length >= BASELINE_MIN) {
         const high = Math.max(...values);
-        if (now.ev.e > high) add('events', 'todo', 'Windows 오류 기록이 평소보다 많음', `평소(지난 ${values.length}회) 최고 ${high}건 → 지금 ${now.ev.e}건 (최근 24시간)${now.ev.tr ? ' · 일부 집계' : ''}`, '이벤트 뷰어 › Windows 로그 › 시스템·응용 프로그램에서 오류를 직접 확인하세요 · 이 앱은 기록 내용을 읽지 않습니다');
+        if (now.ev.e > high) add('events', 'todo', 'Windows 오류 기록이 평소보다 많음', `평소(지난 ${values.length}회) 최고 ${high}건 → 지금 ${now.ev.e}건 (최근 24시간)${now.ev.tr ? ' · 일부 집계' : ''}`, '이벤트 뷰어 › Windows 로그 › 시스템·응용 프로그램에서 오류를 직접 확인하세요 · 이 앱은 기록 내용을 읽지 않습니다', 'ev:errors', high);
       }
     }
 
@@ -249,6 +250,116 @@ export function createStudentView({ api, onChange } = {}) {
     return { compared: true, previousT: prev[prev.length - 1].t, previousCount: prev.length, list };
   };
 
+  // ---------- 마지막 총공세 4일차: 할 일 · 확인 처리 · 기록 ----------
+  // 할 일 규칙(학생이 정함)
+  // - 바뀐 것(할 일·확인 필요)을 찾으면 할 일로 등록하고 기록에 "발견"으로 남깁니다.
+  // - 상태가 그대로면 「확인했음」을 누를 때까지 계속 보입니다. 같은 일을 두 번 등록하지 않습니다.
+  // - 「확인했음」을 누르면 목록에서 빠지고, 같은 상태가 이어지는 동안 다시 알리지 않습니다. 실수로 눌렀으면 「다시 할 일로」로 되돌립니다.
+  // - 상태가 저절로 돌아오면(방화벽 다시 켜짐 등) 할 일을 닫고 "해결됨"으로 남깁니다. 돌아왔다가 다시 바뀌면 새 할 일입니다.
+  // - 평소 범위로 찾은 일은 발견 당시의 기준값을 기억해, 그 기준 안으로 돌아왔을 때만 해결로 봅니다.
+  // - 값을 읽지 못한 점검에서는 해결 여부를 판단하지 않습니다(그대로 둠). 시간이 지났다는 이유로 다시 알리지 않습니다.
+  // - 참고(네트워크·CPU·방화벽 다시 켜짐)는 할 일로 만들지 않고 기록에만 남깁니다.
+  const ISSUE_KEY = 'keshev.pc-check.issues.v1';
+  const LOG_LIMIT = 100;
+  const CLOSED_KEEP = 30;
+  const ISSUE_STATUS = new Set(['open', 'acked', 'closed']);
+  const LOG_TYPES = { found: '발견', acked: '확인함', reopened: '다시 할 일로', resolved: '해결됨', note: '참고' };
+  const validIssue = (i) => pcIsRecord(i) && typeof i.id === 'string' && typeof i.key === 'string' && ISSUE_STATUS.has(i.status)
+    && typeof i.title === 'string' && (i.kind === 'todo' || i.kind === 'check') && typeof i.openedAt === 'string';
+  const validLog = (l) => pcIsRecord(l) && typeof l.t === 'string' && Object.hasOwn(LOG_TYPES, l.type) && typeof l.title === 'string';
+  let issueStore = (() => {
+    const empty = { issues: [], log: [], lastT: null };
+    if (!storage) return empty;
+    try {
+      const parsed = JSON.parse(storage.getItem(ISSUE_KEY) ?? 'null');
+      if (!pcIsRecord(parsed)) return empty;
+      return {
+        issues: Array.isArray(parsed.issues) ? parsed.issues.filter(validIssue) : [],
+        log: Array.isArray(parsed.log) ? parsed.log.filter(validLog).slice(-LOG_LIMIT) : [],
+        lastT: typeof parsed.lastT === 'string' ? parsed.lastT : null,
+      };
+    } catch {
+      return empty;
+    }
+  })();
+  const saveIssues = () => {
+    if (!storage) return;
+    try { storage.setItem(ISSUE_KEY, JSON.stringify(issueStore)); } catch { /* 저장 실패 시 이번 실행 중에만 기억 */ }
+  };
+  const addLog = (type, title, detail, t = new Date().toISOString()) => {
+    issueStore.log = [...issueStore.log, { t, type, title, detail: typeof detail === 'string' ? detail : '' }].slice(-LOG_LIMIT);
+  };
+
+  // 지금 점검 값으로 할 일의 상태가 아직 이어지는지 판단합니다. true=이어짐, false=돌아옴, null=판단 불가(값 없음)
+  const conditionActive = (issue, e) => {
+    const [group, sub] = issue.key.split(':');
+    const hasLimit = typeof issue.limit === 'number' && Number.isFinite(issue.limit);
+    if (group === 'read') return PICKS[sub] ? PICKS[sub](e) == null : null;
+    if (group === 'fw') return pcIsRecord(e.fw) && typeof e.fw[sub] === 'boolean' ? e.fw[sub] === false : null;
+    if (issue.key === 'disk:floor') return typeof e.disk === 'number' ? e.disk < RULE.DISK_FLOOR : null;
+    if (issue.key === 'disk:drop') return typeof e.disk === 'number' && hasLimit ? e.disk < issue.limit : null;
+    if (issue.key === 'mem:high') return typeof e.mem === 'number' && hasLimit ? e.mem > issue.limit : null;
+    if (issue.key === 'ev:errors') return pcIsRecord(e.ev) && pcCount(e.ev.e) && hasLimit ? e.ev.e > issue.limit : null;
+    return null;
+  };
+
+  const processCheck = (changes, now) => {
+    if (issueStore.lastT === now.t) return;
+    for (const issue of issueStore.issues) {
+      if (issue.status === 'closed') continue;
+      if (conditionActive(issue, now) === false) {
+        const wasAcked = issue.status === 'acked';
+        issue.status = 'closed';
+        issue.closedAt = now.t;
+        addLog('resolved', issue.title, wasAcked ? '확인 처리한 뒤 상태가 돌아옴' : '확인하기 전에 상태가 저절로 돌아옴', now.t);
+      }
+    }
+    for (const change of changes.list) {
+      if (!change.key) { addLog('note', change.title, change.evidence, now.t); continue; }
+      if (issueStore.issues.some((i) => i.key === change.key && i.status !== 'closed')) continue;
+      issueStore.issues.push({
+        id: `${change.key}@${now.t}`, key: change.key, kind: change.kind, item: change.item, title: change.title,
+        evidence: change.evidence, hint: change.hint, limit: change.limit, openedAt: now.t, status: 'open',
+      });
+      addLog('found', change.title, change.evidence, now.t);
+    }
+    const closed = issueStore.issues.filter((i) => i.status === 'closed');
+    if (closed.length > CLOSED_KEEP) {
+      const drop = new Set(closed.slice(0, closed.length - CLOSED_KEEP).map((i) => i.id));
+      issueStore.issues = issueStore.issues.filter((i) => !drop.has(i.id));
+    }
+    issueStore.lastT = now.t;
+    saveIssues();
+  };
+
+  let focusAfter = null;
+  const issuesBy = (status) => issueStore.issues
+    .filter((i) => i.status === status)
+    .sort((a, b) => (a.kind === b.kind ? Date.parse(b.openedAt) - Date.parse(a.openedAt) : (a.kind === 'todo' ? -1 : 1)));
+  const acknowledge = (id) => {
+    const issue = issueStore.issues.find((i) => i.id === id && i.status === 'open');
+    if (!issue) return;
+    const open = issuesBy('open');
+    const next = open[open.findIndex((i) => i.id === id) + 1] ?? open.find((i) => i.id !== id);
+    issue.status = 'acked';
+    issue.ackedAt = new Date().toISOString();
+    addLog('acked', issue.title, '같은 상태가 이어지는 동안 다시 알리지 않음');
+    saveIssues();
+    focusAfter = next ? `ack:${next.id}` : 'pc-check';
+    notifyChange();
+  };
+  const reopen = (id) => {
+    const issue = issueStore.issues.find((i) => i.id === id && i.status === 'acked');
+    if (!issue) return;
+    issue.status = 'open';
+    delete issue.ackedAt;
+    addLog('reopened', issue.title, '확인 처리를 되돌림');
+    saveIssues();
+    focusAfter = `ack:${issue.id}`;
+    notifyChange();
+  };
+  let historyOpen = false;
+
   async function runPcCheck() {
     if (pcCheck.status === 'loading') return;
     if (!api || typeof api.get !== 'function') {
@@ -263,7 +374,10 @@ export function createStudentView({ api, onChange } = {}) {
     try { result = await api.get(PC_PATH); } catch { result = { ok: false, error: { code: 'CLIENT_ERROR' } }; }
     if (own !== pcGeneration) return;
     pcCheck = classify(result);
-    if (pcCheck.status === 'ok') remember(pcCheck);
+    if (pcCheck.status === 'ok') {
+      const entry = remember(pcCheck);
+      if (entry) processCheck(detectChanges(entry.t), entry);
+    }
     notifyChange();
   }
 
@@ -300,6 +414,7 @@ export function createStudentView({ api, onChange } = {}) {
     section.append(head);
     section.append(pcNode('p', 'muted', '이 PC에서 실제로 잰 값만 보여 줍니다. 누를 때 한 번만 읽고, 스스로 다시 읽지 않습니다.'));
     section.append(pcNode('p', 'muted', '보안 서버(SDP) 연결과 상관없이 작동합니다. 보안 서버 연결 상태는 아래 「보안 서버 연결 상태」에 따로 표시하며, 이 점검 결과와 섞지 않습니다.'));
+    section.append(renderTodo());
 
     const actions = pcNode('div', 'event-actions');
     const loading = pcCheck.status === 'loading';
@@ -399,6 +514,8 @@ export function createStudentView({ api, onChange } = {}) {
       section.append(list);
     }
 
+    section.append(renderWatchAndLog());
+
     const saved = pcHistory.length;
     section.append(pcNode('p', 'muted', historySaved
       ? `점검 기록: 이 브라우저에 ${saved}회 저장됨 · 숫자와 켜짐/꺼짐만 저장하고 비밀값·개인정보·기록 내용은 저장하지 않습니다`
@@ -406,10 +523,97 @@ export function createStudentView({ api, onChange } = {}) {
     return section;
   }
 
+  // 맨 위 결론: 지금 할 일. 저장된 할 일만 보여 주며, 그리기 때문에 PC 값을 다시 읽지 않습니다.
+  function renderTodo() {
+    const box = pcNode('div', 'event');
+    box.setAttribute('data-pc-todo', '');
+    const open = issuesBy('open');
+    const watching = issuesBy('acked').length;
+    const last = pcHistory.length ? pcHistory[pcHistory.length - 1].t : null;
+    const lastText = last ? `마지막 점검 ${shortTime(last)} (${ageText(Math.max(0, Date.now() - Date.parse(last)))})` : '아직 점검 기록 없음';
+    const title = pcNode('h4', null, open.length ? `지금 할 일 ${open.length}개` : (last ? '지금 할 일 없음' : '아직 점검 전'));
+    title.setAttribute('role', 'status');
+    box.append(title);
+    box.append(pcNode('p', 'muted', `${lastText}${watching ? ` · 확인 처리한 일 ${watching}개는 상태가 돌아올 때까지 조용히 지켜봅니다` : ''}`));
+    if (!last && !open.length) box.append(pcNode('p', 'muted', '「내 PC 점검」을 누르면 이 PC의 값을 읽고, 평소와 달라진 것이 있을 때만 여기에 할 일로 알려 드립니다.'));
+    if (last && !open.length) box.append(pcNode('p', 'muted', '할 일이 없을 때는 바로 닫으셔도 됩니다. 이 결과는 마지막 점검 기준이며, 지금 상태를 보려면 다시 점검하세요.'));
+    if (open.length) {
+      const ul = pcNode('ul', 'records');
+      for (const issue of open) {
+        const li = pcNode('li', 'event');
+        li.setAttribute('data-issue', issue.id);
+        const h = pcNode('div', 'event-head');
+        h.append(pcNode('span', 'tag tag-demo', KIND_TEXT[issue.kind]), pcNode('span', 'item-title', issue.title));
+        li.append(h);
+        li.append(pcNode('p', null, `근거: ${issue.evidence}`));
+        li.append(pcNode('p', 'muted', `발견 ${shortTime(issue.openedAt)} · 출처 이 PC(local-pc)`));
+        li.append(pcNode('p', null, `확인 방법: ${issue.hint}`));
+        const actions = pcNode('div', 'event-actions');
+        const ack = pcNode('button', 'btn', '확인했음');
+        ack.type = 'button';
+        ack.dataset.focusKey = `ack:${issue.id}`;
+        ack.setAttribute('aria-label', `확인했음: ${issue.title}`);
+        ack.addEventListener('click', () => acknowledge(issue.id));
+        actions.append(ack);
+        li.append(actions);
+        ul.append(li);
+      }
+      box.append(ul);
+    }
+    return box;
+  }
+
+  // 확인 처리한 일(되돌리기 가능)과 시간순 기록
+  function renderWatchAndLog() {
+    const wrap = pcNode('div', null);
+    const acked = issuesBy('acked');
+    if (acked.length) {
+      const box = pcNode('div', 'event');
+      box.setAttribute('data-pc-watching', String(acked.length));
+      box.append(pcNode('h4', null, `확인 처리한 일 ${acked.length}개 · 조용히 지켜보는 중`));
+      box.append(pcNode('p', 'muted', '상태가 돌아오면 자동으로 "해결됨"이 됩니다. 실수로 눌렀다면 되돌릴 수 있습니다.'));
+      const ul = pcNode('ul', 'records');
+      for (const issue of acked) {
+        const li = pcNode('li', 'event');
+        li.append(pcNode('p', null, `${issue.title} · 발견 ${shortTime(issue.openedAt)} · 확인 ${shortTime(issue.ackedAt)}`));
+        const undo = pcNode('button', 'btn', '다시 할 일로');
+        undo.type = 'button';
+        undo.dataset.focusKey = `reopen:${issue.id}`;
+        undo.setAttribute('aria-label', `다시 할 일로: ${issue.title}`);
+        undo.addEventListener('click', () => reopen(issue.id));
+        li.append(undo);
+        ul.append(li);
+      }
+      box.append(ul);
+      wrap.append(box);
+    }
+    const details = document.createElement('details');
+    details.setAttribute('data-pc-log', String(issueStore.log.length));
+    details.open = historyOpen;
+    details.addEventListener('toggle', () => { historyOpen = details.open; });
+    details.append(pcNode('summary', null, `점검 기록 · 발견·확인·해결 ${issueStore.log.length}건 (최근 순)`));
+    if (!issueStore.log.length) {
+      details.append(pcNode('p', 'muted', '아직 기록이 없습니다. 바뀐 것을 찾거나 확인 처리하면 여기에 시간순으로 남습니다.'));
+    } else {
+      const ol = pcNode('ol', 'records');
+      for (const entry of [...issueStore.log].reverse()) {
+        const li = pcNode('li', 'event');
+        li.setAttribute('data-log-type', entry.type);
+        li.append(pcNode('span', entry.type === 'found' ? 'tag tag-demo' : 'tag', LOG_TYPES[entry.type]));
+        li.append(pcNode('span', null, ` ${shortTime(entry.t)} · ${entry.title}${entry.detail ? ` · ${entry.detail}` : ''}`));
+        ol.append(li);
+      }
+      details.append(ol);
+    }
+    wrap.append(details);
+    return wrap;
+  }
+
   // 앱이 이 칸을 다시 그리면 버튼도 새로 만들어지므로, 버튼에 있던 초점을 같은 버튼으로 되돌립니다.
   function keepFocus(nextRoot) {
     const active = typeof document !== 'undefined' ? document.activeElement : null;
     if (pcRoot && active && pcRoot.contains(active) && active.dataset?.focusKey) pendingFocusKey = active.dataset.focusKey;
+    if (focusAfter) { pendingFocusKey = focusAfter; focusAfter = null; }
     pcRoot = nextRoot;
     if (!pendingFocusKey) return;
     queueMicrotask(() => {
