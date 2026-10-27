@@ -152,6 +152,103 @@ export function createStudentView({ api, onChange } = {}) {
     saveHistory();
   };
 
+  // ---------- 마지막 총공세 3일차: 지난 점검과 비교해 바뀐 것 찾기 ----------
+  // 기준(학생이 정함): 방화벽 켜짐→꺼짐 · 디스크 여유 평소 최저보다 5%p 넘게 감소 또는 10% 미만 · 메모리 평소 최고보다 10%p 넘게 높음
+  // · Windows 오류 수 평소 최고보다 많음 · 네트워크 개수 바뀜(참고) · CPU 3번 연속 평소 최고보다 높음(참고) · 이전엔 읽혔는데 지금 확인 불가(확인 필요).
+  // 평소 범위가 필요한 비교는 지난 점검이 5회 미만이면 하지 않습니다. 결과는 저장하지 않고 점검 기록에서 매번 다시 계산합니다.
+  const RULE = { DISK_DROP: 5, DISK_FLOOR: 10, MEM_RISE: 10, CPU_STREAK: 3 };
+  const PC_LABELS = { cpu: 'CPU', memory: '메모리', disk: '디스크', network: '네트워크', firewall: 'Windows 방화벽', events: 'Windows 기록' };
+  const KIND_TEXT = { todo: '할 일', check: '확인 필요', note: '참고' };
+  const KIND_ORDER = { todo: 0, check: 1, note: 2 };
+  const shortTime = (iso) => {
+    const full = kstText(iso);
+    return full === '시각 확인 불가' ? full : full.slice(5, 16).replace('-', '/');
+  };
+  const detectChanges = (currentT) => {
+    const idx = pcHistory.map((entry) => entry.t).lastIndexOf(currentT);
+    if (idx < 0) return { compared: false, list: [] };
+    const now = pcHistory[idx];
+    const prev = pcHistory.slice(0, idx);
+    if (!prev.length) return { compared: false, list: [] };
+    const list = [];
+    const add = (item, kind, title, evidence, hint) => list.push({ item, kind, title, evidence, hint });
+    const lastWith = (pick) => {
+      for (let i = prev.length - 1; i >= 0; i -= 1) {
+        const value = pick(prev[i]);
+        if (value != null) return { t: prev[i].t, value };
+      }
+      return null;
+    };
+    const numbers = (from, pick) => from.map(pick).filter((v) => typeof v === 'number' && Number.isFinite(v)).slice(-BASELINE_WINDOW);
+
+    // 이전엔 읽혔는데 이번엔 읽지 못한 항목
+    const picks = { cpu: (e) => e.cpu, memory: (e) => e.mem, disk: (e) => e.disk, network: (e) => e.net, firewall: (e) => e.fw, events: (e) => e.ev };
+    for (const [item, pick] of Object.entries(picks)) {
+      if (pick(now) != null) continue;
+      const last = lastWith(pick);
+      if (last) add(item, 'check', `${PC_LABELS[item]} 값을 이번에 읽지 못함`, `이전(${shortTime(last.t)}) 읽힘 → 지금 확인 불가`, '「내 PC 점검」을 다시 눌러 보고, 계속되면 권한이나 Windows 서비스 상태를 확인하세요');
+    }
+
+    // 방화벽: 평소 범위 없이 바로 비교
+    const fwLast = pcIsRecord(now.fw) ? lastWith((e) => (pcIsRecord(e.fw) ? e.fw : null)) : null;
+    if (fwLast) {
+      for (const name of ['Domain', 'Private', 'Public']) {
+        const before = fwLast.value[name];
+        const after = now.fw[name];
+        if (before === true && after === false) add('firewall', 'todo', `방화벽 ${name} 프로필이 꺼짐`, `이전(${shortTime(fwLast.t)}) 켜짐 → 지금 꺼짐`, 'Windows 보안 › 방화벽 및 네트워크 보호에서 직접 확인하세요 · 이 앱은 설정을 바꾸지 않습니다');
+        if (before === false && after === true) add('firewall', 'note', `방화벽 ${name} 프로필이 다시 켜짐`, `이전(${shortTime(fwLast.t)}) 꺼짐 → 지금 켜짐`, '할 일 없음');
+      }
+    }
+
+    // 디스크 여유
+    if (typeof now.disk === 'number') {
+      const values = numbers(prev, (e) => e.disk);
+      const low = values.length ? Math.min(...values) : null;
+      if (now.disk < RULE.DISK_FLOOR) {
+        add('disk', 'todo', `디스크 여유 공간이 ${RULE.DISK_FLOOR}% 미만`, `지금 ${now.disk.toFixed(1)}% 여유${low != null ? ` · 지난 점검 최저 ${low.toFixed(1)}% 여유` : ''}`, '필요 없는 큰 파일, 다운로드 폴더, 휴지통을 직접 확인하세요');
+      } else if (values.length >= BASELINE_MIN && now.disk < low - RULE.DISK_DROP) {
+        add('disk', 'todo', '디스크 여유가 평소보다 크게 줄었음', `평소(지난 ${values.length}회) 최저 ${low.toFixed(1)}% 여유 → 지금 ${now.disk.toFixed(1)}% 여유 (${(low - now.disk).toFixed(1)}%p 감소)`, '최근 설치하거나 내려받은 큰 파일을 직접 확인하세요');
+      }
+    }
+
+    // 메모리
+    if (typeof now.mem === 'number') {
+      const values = numbers(prev, (e) => e.mem);
+      if (values.length >= BASELINE_MIN) {
+        const high = Math.max(...values);
+        if (now.mem > high + RULE.MEM_RISE) add('memory', 'todo', '메모리 사용이 평소보다 높음', `평소(지난 ${values.length}회) 최고 ${high.toFixed(1)}% → 지금 ${now.mem.toFixed(1)}% (${(now.mem - high).toFixed(1)}%p 높음)`, '작업 관리자(Ctrl+Shift+Esc) › 프로세스에서 메모리를 많이 쓰는 앱을 확인하세요');
+      }
+    }
+
+    // Windows 오류 수 (경고는 흔해서 비교하지 않음)
+    if (pcIsRecord(now.ev) && pcCount(now.ev.e)) {
+      const values = numbers(prev, (e) => (pcIsRecord(e.ev) ? e.ev.e : null));
+      if (values.length >= BASELINE_MIN) {
+        const high = Math.max(...values);
+        if (now.ev.e > high) add('events', 'todo', 'Windows 오류 기록이 평소보다 많음', `평소(지난 ${values.length}회) 최고 ${high}건 → 지금 ${now.ev.e}건 (최근 24시간)${now.ev.tr ? ' · 일부 집계' : ''}`, '이벤트 뷰어 › Windows 로그 › 시스템·응용 프로그램에서 오류를 직접 확인하세요 · 이 앱은 기록 내용을 읽지 않습니다');
+      }
+    }
+
+    // 네트워크 개수 (참고)
+    const netLast = pcIsRecord(now.net) ? lastWith((e) => (pcIsRecord(e.net) ? e.net : null)) : null;
+    if (netLast && (netLast.value.i !== now.net.i || netLast.value.v4 !== now.net.v4)) {
+      add('network', 'note', '네트워크 구성 개수가 바뀜', `이전(${shortTime(netLast.t)}) 인터페이스 ${netLast.value.i}개·IPv4 ${netLast.value.v4}개 → 지금 ${now.net.i}개·${now.net.v4}개`, 'VPN·와이파이·유선 연결을 바꿨다면 자연스러운 변화입니다');
+    }
+
+    // CPU: 순간 값이라 3번 연속 평소 최고보다 높을 때만 참고로 표시
+    const run = [...prev.slice(-(RULE.CPU_STREAK - 1)), now];
+    if (run.length === RULE.CPU_STREAK && run.every((e) => typeof e.cpu === 'number')) {
+      const values = numbers(prev.slice(0, prev.length - (RULE.CPU_STREAK - 1)), (e) => e.cpu);
+      if (values.length >= BASELINE_MIN) {
+        const high = Math.max(...values);
+        if (run.every((e) => e.cpu > high)) add('cpu', 'note', `CPU 사용이 ${RULE.CPU_STREAK}번 연속 평소보다 높음`, `평소(그 전 ${values.length}회) 최고 ${high.toFixed(1)}% → 최근 ${RULE.CPU_STREAK}번 ${run.map((e) => `${e.cpu.toFixed(1)}%`).join(' · ')}`, '작업 관리자 › 프로세스에서 CPU를 많이 쓰는 앱을 확인하세요 · 보안 문제라는 뜻은 아닙니다');
+      }
+    }
+
+    list.sort((a, b) => KIND_ORDER[a.kind] - KIND_ORDER[b.kind]);
+    return { compared: true, previousT: prev[prev.length - 1].t, previousCount: prev.length, list };
+  };
+
   async function runPcCheck() {
     if (pcCheck.status === 'loading') return;
     if (!api || typeof api.get !== 'function') {
@@ -202,6 +299,7 @@ export function createStudentView({ api, onChange } = {}) {
     head.append(pcNode('h3', null, '내 PC 점검'), pcNode('span', 'tag tag-student', '학생 구현 · 총공세'));
     section.append(head);
     section.append(pcNode('p', 'muted', '이 PC에서 실제로 잰 값만 보여 줍니다. 누를 때 한 번만 읽고, 스스로 다시 읽지 않습니다.'));
+    section.append(pcNode('p', 'muted', '보안 서버(SDP) 연결과 상관없이 작동합니다. 보안 서버 연결 상태는 아래 「보안 서버 연결 상태」에 따로 표시하며, 이 점검 결과와 섞지 않습니다.'));
 
     const actions = pcNode('div', 'event-actions');
     const loading = pcCheck.status === 'loading';
@@ -238,11 +336,46 @@ export function createStudentView({ api, onChange } = {}) {
       status(stale ? 'empty' : (measuredCount ? 'ok' : 'empty'),
         `${stale ? '오래됨 · 현재 상태로 보지 않음 · ' : ''}${coverage} · 잰 시각 ${kstText(pcCheck.measuredAt)} · ${Number.isFinite(age) ? ageText(Math.max(0, age)) : '경과 시간 확인 불가'} · 출처 이 PC(local-pc)`);
 
+      // 지난 점검과 비교한 결과를 칸 목록보다 먼저 보여 줍니다.
+      const changes = detectChanges(pcCheck.measuredAt);
+      const changeBox = pcNode('div', 'event');
+      changeBox.setAttribute('data-pc-changes', changes.compared ? String(changes.list.length) : 'none');
+      changeBox.append(pcNode('h4', null, `${stale ? '오래된 점검 기준 · ' : ''}지난 점검과 비교`));
+      if (!changes.compared) {
+        changeBox.append(pcNode('p', 'muted', '비교할 지난 점검이 없습니다 · 첫 점검은 비교하지 않습니다'));
+      } else {
+        const count = (kind) => changes.list.filter((c) => c.kind === kind).length;
+        const urgent = count('todo') + count('check');
+        changeBox.append(pcNode('p', urgent ? 'state state-error' : (changes.list.length ? 'state state-empty' : 'state state-ok'), changes.list.length
+          ? `바뀐 것 ${changes.list.length}개 · 할 일 ${count('todo')} · 확인 필요 ${count('check')} · 참고 ${count('note')}`
+          : `바뀐 것 없음 · 비교 대상: 바로 전 점검(${shortTime(changes.previousT)})${changes.previousCount >= BASELINE_MIN ? `과 평소 범위(지난 ${Math.min(changes.previousCount, BASELINE_WINDOW)}회)` : ''}`));
+        if (changes.previousCount < BASELINE_MIN) {
+          changeBox.append(pcNode('p', 'muted', `평소 범위 비교는 지난 점검이 ${BASELINE_MIN}회 모인 뒤 시작합니다(지금 ${changes.previousCount}회) · 지금은 방화벽·네트워크·읽기 실패·디스크 ${RULE.DISK_FLOOR}% 미만만 비교합니다`));
+        }
+        if (changes.list.length) {
+          const ul = pcNode('ul', 'records');
+          for (const change of changes.list) {
+            const li = pcNode('li', 'event');
+            li.setAttribute('data-change-kind', change.kind);
+            const h = pcNode('div', 'event-head');
+            h.append(pcNode('span', change.kind === 'note' ? 'tag' : 'tag tag-demo', KIND_TEXT[change.kind]), pcNode('span', 'item-title', change.title));
+            li.append(h, pcNode('p', null, `근거: ${change.evidence}`), pcNode('p', 'muted', change.hint));
+            ul.append(li);
+          }
+          changeBox.append(ul);
+        }
+      }
+      section.append(changeBox);
+
+      const changedBy = {};
+      for (const change of changes.list) (changedBy[change.item] ??= []).push(change);
+
       const list = pcNode('ul', 'records');
       for (const key of keys) {
         const item = items[key];
         const li = pcNode('li', 'event');
         li.setAttribute('data-pc-item', key);
+        if (changedBy[key]) li.setAttribute('data-changed', changedBy[key].map((c) => c.kind).join(' '));
         const itemHead = pcNode('div', 'event-head');
         itemHead.append(pcNode('span', 'item-title', labels[key]));
         itemHead.append(pcNode('span', item.ok ? 'tag' : 'tag tag-demo', item.ok ? (stale ? '실측 · 오래됨' : '실측') : '확인 불가'));
@@ -250,13 +383,16 @@ export function createStudentView({ api, onChange } = {}) {
         if (item.ok) {
           li.append(pcNode('p', null, item.text));
           li.append(pcNode('p', 'muted', item.note));
-          if (key === 'cpu') li.append(pcNode('p', 'muted', baseline('cpu', pcCheck.measuredAt)));
+          if (key === 'cpu') li.append(pcNode('p', 'muted', `${baseline('cpu', pcCheck.measuredAt)} · 순간 값이라 ${RULE.CPU_STREAK}번 연속 평소 최고보다 높을 때만 참고로 알림`));
           if (key === 'memory') li.append(pcNode('p', 'muted', baseline('mem', pcCheck.measuredAt)));
           if (key === 'disk') li.append(pcNode('p', 'muted', baseline('disk', pcCheck.measuredAt, '% 여유')));
           if (key === 'events') li.append(pcNode('p', 'muted', eventBaseline(pcCheck.measuredAt)));
         } else {
           li.append(pcNode('p', null, `확인 불가 · ${item.reason}`));
           li.append(pcNode('p', 'muted', '0이나 예시 값으로 채우지 않습니다 · 정상으로 보지 않습니다'));
+        }
+        for (const change of changedBy[key] ?? []) {
+          li.append(pcNode('p', change.kind === 'note' ? 'state state-empty' : 'state state-error', `바뀜(${KIND_TEXT[change.kind]}) · ${change.evidence}`));
         }
         list.append(li);
       }
