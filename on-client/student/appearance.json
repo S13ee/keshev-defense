@@ -1,0 +1,6 @@
+{
+  "schema": "alekov.student-appearance.v1",
+  "appName": "PC Drift",
+  "palette": { "accent": "#4F5BD5", "background": "#EEF1F7", "surface": "#FFFFFF" },
+  "dashboardPreset": "student-first"
+}

@@ -406,25 +406,103 @@ export function createStudentView({ api, onChange } = {}) {
     return n;
   };
 
-  function renderPcCheck() {
-    const section = pcNode('section', 'event');
-    section.setAttribute('aria-label', '내 PC 점검');
-    const head = pcNode('div', 'event-head');
-    head.append(pcNode('h3', null, '내 PC 점검'), pcNode('span', 'tag tag-student', '학생 구현 · 총공세'));
-    section.append(head);
-    section.append(pcNode('p', 'muted', '이 PC에서 실제로 잰 값만 보여 줍니다. 누를 때 한 번만 읽고, 스스로 다시 읽지 않습니다.'));
-    section.append(pcNode('p', 'muted', '보안 서버(SDP) 연결과 상관없이 작동합니다. 보안 서버 연결 상태는 아래 「보안 서버 연결 상태」에 따로 표시하며, 이 점검 결과와 섞지 않습니다.'));
-    section.append(renderTodo());
+  // ---------- 마지막 총공세 4일차 디자인: PC Drift 화면 ----------
+  // 제공 문서 권장대로 style 속성을 쓰지 않고 기존 CSS 클래스(explanation·grid-2·event·state·decision·tag·muted)만 씁니다.
+  // 순서: 결론(지금 할 일) → 다시 점검 → 이번 점검 결과 → 상태 6칸(2칸 배치) → 확인 처리한 일·변화 기록.
+  const APP_NAME = 'PC Drift';
+  const TAGLINE = '내 PC, 평소와 달라진 것을 알려드립니다';
+  let sampleMode = false;
+  const toggleSample = () => {
+    sampleMode = !sampleMode;
+    focusAfter = 'sample-toggle';
+    notifyChange();
+  };
+  const actionButton = (text, key, onClick, { disabled = false, label } = {}) => {
+    const b = pcNode('button', 'btn', text);
+    b.type = 'button';
+    b.dataset.focusKey = key;
+    if (label) b.setAttribute('aria-label', label);
+    if (disabled) { b.disabled = true; b.setAttribute('aria-disabled', 'true'); }
+    if (onClick) b.addEventListener('click', onClick);
+    return b;
+  };
+  const brandBlock = () => {
+    const brand = pcNode('div', 'event-head');
+    brand.append(pcNode('strong', null, APP_NAME), pcNode('span', 'tag tag-student', '학생 구현'));
+    return [brand, pcNode('p', 'muted', TAGLINE)];
+  };
+  const issueCard = (issue, { sample = false } = {}) => {
+    const li = pcNode('li', 'event');
+    li.setAttribute('data-issue', issue.id);
+    const h = pcNode('div', 'event-head');
+    h.append(pcNode('span', issue.kind === 'todo' ? 'tag tag-demo' : 'tag', KIND_TEXT[issue.kind]), pcNode('span', 'item-title', issue.title));
+    if (sample) h.append(pcNode('span', 'tag tag-demo', '예시'));
+    li.append(h);
+    li.append(pcNode('p', null, `근거: ${issue.evidence}`));
+    li.append(pcNode('p', 'muted', `발견 ${sample ? issue.openedText : shortTime(issue.openedAt)} · 출처 ${sample ? '견본(예시)' : '이 PC(local-pc)'}`));
+    li.append(pcNode('p', null, `확인 방법: ${issue.hint}`));
+    const actions = pcNode('div', 'event-actions');
+    actions.append(sample
+      ? actionButton('확인했음', `sample-ack:${issue.id}`, null, { disabled: true, label: `확인했음(견본이라 누를 수 없음): ${issue.title}` })
+      : actionButton('확인했음', `ack:${issue.id}`, () => acknowledge(issue.id), { label: `확인했음: ${issue.title}` }));
+    li.append(actions);
+    return li;
+  };
 
+  // 맨 위 결론 상자: 앱 이름 · 지금 할 일 · 다시 점검 · 견본 보기
+  function renderTodo() {
+    const box = pcNode('div', 'explanation');
+    box.setAttribute('data-pc-todo', '');
+    box.append(...brandBlock());
+    const open = issuesBy('open');
+    const watching = issuesBy('acked').length;
+    const last = pcHistory.length ? pcHistory[pcHistory.length - 1].t : null;
+    const lastText = last ? `마지막 점검 ${shortTime(last)} (${ageText(Math.max(0, Date.now() - Date.parse(last)))})` : '아직 점검 기록 없음';
+    const title = pcNode('h3', null, open.length ? `지금 할 일 ${open.length}개` : (last ? '지금 할 일 없음' : '아직 점검 전'));
+    title.setAttribute('role', 'status');
+    box.append(title);
+    box.append(pcNode('p', 'muted', `${lastText}${watching ? ` · 확인 처리한 일 ${watching}개는 상태가 돌아올 때까지 조용히 지켜봅니다` : ''}`));
+    if (!last && !open.length) box.append(pcNode('p', 'muted', '「내 PC 점검」을 누르면 이 PC의 값을 읽고, 평소와 달라진 것이 있을 때만 여기에 할 일로 알려 드립니다.'));
+    if (last && !open.length) box.append(pcNode('p', 'muted', '할 일이 없을 때는 바로 닫으셔도 됩니다. 마지막 점검 기준이며, 지금 상태는 다시 점검해서 확인하세요.'));
+    if (open.length) {
+      const ul = pcNode('ul', 'records');
+      for (const issue of open) ul.append(issueCard(issue));
+      box.append(ul);
+    }
     const actions = pcNode('div', 'event-actions');
     const loading = pcCheck.status === 'loading';
-    const button = pcNode('button', 'btn', loading ? '점검 중…' : '내 PC 점검');
-    button.type = 'button';
-    button.dataset.focusKey = 'pc-check';
-    if (loading) button.setAttribute('aria-disabled', 'true');
-    button.addEventListener('click', () => { void runPcCheck(); });
-    actions.append(button);
-    section.append(actions);
+    const check = actionButton(loading ? '점검 중…' : (last ? '다시 점검' : '내 PC 점검'), 'pc-check', () => { void runPcCheck(); });
+    if (loading) check.setAttribute('aria-disabled', 'true');
+    actions.append(check, actionButton('견본 보기', 'sample-toggle', toggleSample, { label: '견본 보기: 할 일이 있을 때의 예시 화면' }));
+    box.append(actions);
+    box.append(pcNode('p', 'muted', '누를 때 한 번만 읽고, 스스로 다시 읽지 않습니다. 보안 서버(SDP) 연결과 상관없이 작동하며, 보안 서버 연결 상태는 아래 「보안 서버 연결 상태」에 따로 표시해 이 점검 결과와 섞지 않습니다.'));
+    return box;
+  }
+
+  // 점검하지 못했을 때: 무엇이 안 됐는지와 다음에 할 일
+  const FAIL_GUIDE = {
+    TIMEOUT: '이 PC의 값을 읽는 데 시간이 너무 오래 걸렸습니다.',
+    CLIENT_ERROR: '앱 서버에 요청을 보내지 못했습니다. 앱 서버 창이 꺼졌을 수 있습니다.',
+  };
+  function renderFailure(code) {
+    const box = pcNode('div', 'state state-error');
+    box.setAttribute('role', 'status');
+    box.setAttribute('data-pc-failure', code);
+    box.append(pcNode('strong', null, `점검 실패(${code}) · 이번에는 이 PC의 값을 읽지 못했습니다`));
+    box.append(pcNode('p', null, `무엇이 안 됐나: ${FAIL_GUIDE[code] ?? '앱 서버가 실패 응답을 보냈습니다.'} 이전 값을 현재 상태로 보여 주지 않으며, 할 일 목록도 바꾸지 않았습니다.`));
+    box.append(pcNode('p', null, '다음에 할 일:'));
+    const ol = pcNode('ol', null);
+    for (const step of ['앱을 켠 PowerShell 창이 아직 열려 있는지 확인합니다.', '「다시 점검」을 한 번 더 누릅니다(앱이 스스로 다시 시도하지 않습니다).', '계속 실패하면 위쪽 「내 PC 상태」 제공 카드도 값을 읽는지 보고, 아래 「도움정보 복사」 내용을 담당자에게 전달합니다.']) ol.append(pcNode('li', null, step));
+    box.append(ol);
+    return box;
+  }
+
+  function renderPcCheck() {
+    if (sampleMode) return renderSample();
+    const section = pcNode('div', 'records');
+    section.setAttribute('aria-label', `${APP_NAME} · 내 PC 점검`);
+    section.setAttribute('data-pc-drift', 'live');
+    section.append(renderTodo());
 
     const status = (kind, text) => {
       const p = pcNode('p', `state state-${kind}`, text);
@@ -432,36 +510,33 @@ export function createStudentView({ api, onChange } = {}) {
       section.append(p);
     };
 
-    if (pcCheck.status === 'idle') status('empty', '아직 점검하지 않았습니다 · 확인 불가(조회 전)');
+    if (pcCheck.status === 'idle') status('empty', '이번 실행에서는 아직 점검하지 않았습니다 · 확인 불가(조회 전)');
     else if (pcCheck.status === 'loading') status('loading', '점검 중… CPU 표본과 Windows 기록을 읽고 있습니다');
     else if (pcCheck.status === 'unsupported') status('empty', `지원 없음(${pcCheck.code}) · 이 앱에서는 학생 화면이 PC 값을 읽을 수 없습니다. 위쪽 「내 PC 상태」 제공 카드를 확인하세요`);
-    else if (pcCheck.status === 'failed') status('error', `점검 실패(${pcCheck.code}) · 이전 값을 현재 상태로 보여 주지 않습니다 · 「내 PC 점검」을 다시 눌러 주세요`);
+    else if (pcCheck.status === 'failed') section.append(renderFailure(pcCheck.code));
     else if (pcCheck.status === 'unverifiable') status('empty', `확인 불가(${pcCheck.code}) · 응답 형식을 확인하지 못해 값을 보여 주지 않습니다`);
     else if (pcCheck.status === 'ok') {
       const items = pcCheck.items;
-      const labels = { cpu: 'CPU', memory: '메모리', disk: '디스크', network: '네트워크', firewall: 'Windows 방화벽', events: 'Windows 기록' };
-      const keys = Object.keys(labels);
+      const keys = Object.keys(PC_LABELS);
       const missing = keys.filter((key) => !items[key].ok);
       const age = Date.now() - Date.parse(pcCheck.measuredAt);
       const stale = !Number.isFinite(age) || age > PC_STALE_MS;
       const measuredCount = keys.length - missing.length;
       const coverage = measuredCount === 0
         ? `응답은 왔지만 6개 항목 모두 확인 불가 · 실측 0개`
-        : `실측 ${measuredCount}/6${missing.length ? ` · 확인 불가 ${missing.length}개(${missing.map((key) => labels[key]).join(', ')})` : ''}`;
+        : `실측 ${measuredCount}/6${missing.length ? ` · 확인 불가 ${missing.length}개(${missing.map((key) => PC_LABELS[key]).join(', ')})` : ''}`;
       status(stale ? 'empty' : (measuredCount ? 'ok' : 'empty'),
         `${stale ? '오래됨 · 현재 상태로 보지 않음 · ' : ''}${coverage} · 잰 시각 ${kstText(pcCheck.measuredAt)} · ${Number.isFinite(age) ? ageText(Math.max(0, age)) : '경과 시간 확인 불가'} · 출처 이 PC(local-pc)`);
 
-      // 지난 점검과 비교한 결과를 칸 목록보다 먼저 보여 줍니다.
       const changes = detectChanges(pcCheck.measuredAt);
       const changeBox = pcNode('div', 'event');
       changeBox.setAttribute('data-pc-changes', changes.compared ? String(changes.list.length) : 'none');
-      changeBox.append(pcNode('h4', null, `${stale ? '오래된 점검 기준 · ' : ''}지난 점검과 비교`));
+      changeBox.append(pcNode('h4', null, `${stale ? '오래된 점검 기준 · ' : ''}이번 점검 · 지난 점검과 비교`));
       if (!changes.compared) {
         changeBox.append(pcNode('p', 'muted', '비교할 지난 점검이 없습니다 · 첫 점검은 비교하지 않습니다'));
       } else {
         const count = (kind) => changes.list.filter((c) => c.kind === kind).length;
-        const urgent = count('todo') + count('check');
-        changeBox.append(pcNode('p', urgent ? 'state state-error' : (changes.list.length ? 'state state-empty' : 'state state-ok'), changes.list.length
+        changeBox.append(pcNode('p', null, changes.list.length
           ? `바뀐 것 ${changes.list.length}개 · 할 일 ${count('todo')} · 확인 필요 ${count('check')} · 참고 ${count('note')}`
           : `바뀐 것 없음 · 비교 대상: 바로 전 점검(${shortTime(changes.previousT)})${changes.previousCount >= BASELINE_MIN ? `과 평소 범위(지난 ${Math.min(changes.previousCount, BASELINE_WINDOW)}회)` : ''}`));
         if (changes.previousCount < BASELINE_MIN) {
@@ -470,7 +545,7 @@ export function createStudentView({ api, onChange } = {}) {
         if (changes.list.length) {
           const ul = pcNode('ul', 'records');
           for (const change of changes.list) {
-            const li = pcNode('li', 'event');
+            const li = pcNode('li', change.kind === 'todo' ? 'decision decision-challenge' : (change.kind === 'check' ? 'decision decision-unknown' : 'event'));
             li.setAttribute('data-change-kind', change.kind);
             const h = pcNode('div', 'event-head');
             h.append(pcNode('span', change.kind === 'note' ? 'tag' : 'tag tag-demo', KIND_TEXT[change.kind]), pcNode('span', 'item-title', change.title));
@@ -485,33 +560,39 @@ export function createStudentView({ api, onChange } = {}) {
       const changedBy = {};
       for (const change of changes.list) (changedBy[change.item] ??= []).push(change);
 
-      const list = pcNode('ul', 'records');
+      // 상태 6칸: 제공 2칸 배치(grid-2)
+      const grid = pcNode('div', 'grid-2');
+      grid.setAttribute('data-pc-grid', '');
       for (const key of keys) {
         const item = items[key];
-        const li = pcNode('li', 'event');
-        li.setAttribute('data-pc-item', key);
-        if (changedBy[key]) li.setAttribute('data-changed', changedBy[key].map((c) => c.kind).join(' '));
+        const tile = pcNode('div', 'event');
+        tile.setAttribute('data-pc-item', key);
+        if (changedBy[key]) tile.setAttribute('data-changed', changedBy[key].map((c) => c.kind).join(' '));
         const itemHead = pcNode('div', 'event-head');
-        itemHead.append(pcNode('span', 'item-title', labels[key]));
+        itemHead.append(pcNode('span', 'item-title', PC_LABELS[key]));
         itemHead.append(pcNode('span', item.ok ? 'tag' : 'tag tag-demo', item.ok ? (stale ? '실측 · 오래됨' : '실측') : '확인 불가'));
-        li.append(itemHead);
+        tile.append(itemHead);
         if (item.ok) {
-          li.append(pcNode('p', null, item.text));
-          li.append(pcNode('p', 'muted', item.note));
-          if (key === 'cpu') li.append(pcNode('p', 'muted', `${baseline('cpu', pcCheck.measuredAt)} · 순간 값이라 ${RULE.CPU_STREAK}번 연속 평소 최고보다 높을 때만 참고로 알림`));
-          if (key === 'memory') li.append(pcNode('p', 'muted', baseline('mem', pcCheck.measuredAt)));
-          if (key === 'disk') li.append(pcNode('p', 'muted', baseline('disk', pcCheck.measuredAt, '% 여유')));
-          if (key === 'events') li.append(pcNode('p', 'muted', eventBaseline(pcCheck.measuredAt)));
+          const value = pcNode('p', null);
+          value.append(pcNode('strong', null, item.text));
+          tile.append(value);
+          tile.append(pcNode('p', 'muted', item.note));
+          if (key === 'cpu') tile.append(pcNode('p', 'muted', `${baseline('cpu', pcCheck.measuredAt)} · 순간 값이라 ${RULE.CPU_STREAK}번 연속 평소 최고보다 높을 때만 참고로 알림`));
+          if (key === 'memory') tile.append(pcNode('p', 'muted', baseline('mem', pcCheck.measuredAt)));
+          if (key === 'disk') tile.append(pcNode('p', 'muted', baseline('disk', pcCheck.measuredAt, '% 여유')));
+          if (key === 'events') tile.append(pcNode('p', 'muted', eventBaseline(pcCheck.measuredAt)));
         } else {
-          li.append(pcNode('p', null, `확인 불가 · ${item.reason}`));
-          li.append(pcNode('p', 'muted', '0이나 예시 값으로 채우지 않습니다 · 정상으로 보지 않습니다'));
+          const value = pcNode('p', null);
+          value.append(pcNode('strong', null, `확인 불가 · ${item.reason}`));
+          tile.append(value);
+          tile.append(pcNode('p', 'muted', '0이나 예시 값으로 채우지 않습니다 · 정상으로 보지 않습니다'));
         }
         for (const change of changedBy[key] ?? []) {
-          li.append(pcNode('p', change.kind === 'note' ? 'state state-empty' : 'state state-error', `바뀜(${KIND_TEXT[change.kind]}) · ${change.evidence}`));
+          tile.append(pcNode('p', change.kind === 'todo' ? 'decision decision-challenge' : (change.kind === 'check' ? 'decision decision-unknown' : 'muted'), `바뀜(${KIND_TEXT[change.kind]}) · ${change.evidence}`));
         }
-        list.append(li);
+        grid.append(tile);
       }
-      section.append(list);
+      section.append(grid);
     }
 
     section.append(renderWatchAndLog());
@@ -523,44 +604,57 @@ export function createStudentView({ api, onChange } = {}) {
     return section;
   }
 
-  // 맨 위 결론: 지금 할 일. 저장된 할 일만 보여 주며, 그리기 때문에 PC 값을 다시 읽지 않습니다.
-  function renderTodo() {
-    const box = pcNode('div', 'event');
-    box.setAttribute('data-pc-todo', '');
-    const open = issuesBy('open');
-    const watching = issuesBy('acked').length;
-    const last = pcHistory.length ? pcHistory[pcHistory.length - 1].t : null;
-    const lastText = last ? `마지막 점검 ${shortTime(last)} (${ageText(Math.max(0, Date.now() - Date.parse(last)))})` : '아직 점검 기록 없음';
-    const title = pcNode('h4', null, open.length ? `지금 할 일 ${open.length}개` : (last ? '지금 할 일 없음' : '아직 점검 전'));
-    title.setAttribute('role', 'status');
-    box.append(title);
-    box.append(pcNode('p', 'muted', `${lastText}${watching ? ` · 확인 처리한 일 ${watching}개는 상태가 돌아올 때까지 조용히 지켜봅니다` : ''}`));
-    if (!last && !open.length) box.append(pcNode('p', 'muted', '「내 PC 점검」을 누르면 이 PC의 값을 읽고, 평소와 달라진 것이 있을 때만 여기에 할 일로 알려 드립니다.'));
-    if (last && !open.length) box.append(pcNode('p', 'muted', '할 일이 없을 때는 바로 닫으셔도 됩니다. 이 결과는 마지막 점검 기준이며, 지금 상태를 보려면 다시 점검하세요.'));
-    if (open.length) {
-      const ul = pcNode('ul', 'records');
-      for (const issue of open) {
-        const li = pcNode('li', 'event');
-        li.setAttribute('data-issue', issue.id);
-        const h = pcNode('div', 'event-head');
-        h.append(pcNode('span', 'tag tag-demo', KIND_TEXT[issue.kind]), pcNode('span', 'item-title', issue.title));
-        li.append(h);
-        li.append(pcNode('p', null, `근거: ${issue.evidence}`));
-        li.append(pcNode('p', 'muted', `발견 ${shortTime(issue.openedAt)} · 출처 이 PC(local-pc)`));
-        li.append(pcNode('p', null, `확인 방법: ${issue.hint}`));
-        const actions = pcNode('div', 'event-actions');
-        const ack = pcNode('button', 'btn', '확인했음');
-        ack.type = 'button';
-        ack.dataset.focusKey = `ack:${issue.id}`;
-        ack.setAttribute('aria-label', `확인했음: ${issue.title}`);
-        ack.addEventListener('click', () => acknowledge(issue.id));
-        actions.append(ack);
-        li.append(actions);
-        ul.append(li);
-      }
-      box.append(ul);
+  // 견본 보기: 할 일이 있을 때 화면이 어떻게 보이는지 보여 주는 고정 예시입니다.
+  // PC 값을 읽지 않고, 저장소·할 일·기록을 읽거나 바꾸지 않습니다. 모든 칸에 "예시"를 붙입니다.
+  const SAMPLE_ISSUES = [
+    { id: 'sample-fw', kind: 'todo', title: '방화벽 Public 프로필이 꺼짐', evidence: '이전(어제 09:10) 켜짐 → 지금 꺼짐', hint: 'Windows 보안 › 방화벽 및 네트워크 보호에서 직접 확인하세요 · 이 앱은 설정을 바꾸지 않습니다', openedText: '오늘 10:12' },
+    { id: 'sample-disk', kind: 'check', title: '디스크 값을 이번에 읽지 못함', evidence: '이전(오늘 10:02) 읽힘 → 지금 확인 불가(권한 부족)', hint: '「다시 점검」을 눌러 보고, 계속되면 권한이나 Windows 서비스 상태를 확인하세요', openedText: '오늘 10:12' },
+  ];
+  const SAMPLE_TILES = [
+    ['firewall', 'Domain 켜짐 · Private 켜짐 · Public 꺼짐', 'todo', '바뀜(할 일) · 이전 켜짐 → 지금 꺼짐'],
+    ['disk', '확인 불가 · 권한 부족', 'check', '바뀜(확인 필요) · 이전 읽힘 → 지금 확인 불가'],
+    ['memory', '7.4 GB / 15.8 GB 사용 (46.8%)', null, '평소(지난 8회) 41.0% ~ 52.3%'],
+    ['events', '최근 24시간 경고 21건 · 오류 15건', null, '평소(지난 8회) 오류 12 ~ 19건'],
+    ['network', '인터페이스 3개 · IPv4 구성 3개', null, '바로 전 점검과 같음'],
+    ['cpu', '12.6% 사용', null, '순간 값 · 3번 연속 평소 최고보다 높을 때만 참고로 알림'],
+  ];
+  function renderSample() {
+    const section = pcNode('div', 'records');
+    section.setAttribute('aria-label', `${APP_NAME} · 견본 보기(예시 화면)`);
+    section.setAttribute('data-pc-drift', 'sample');
+    const banner = pcNode('div', 'state state-empty');
+    banner.setAttribute('role', 'status');
+    banner.setAttribute('data-pc-sample', '');
+    const bh = pcNode('div', 'event-head');
+    bh.append(pcNode('span', 'tag tag-demo', '견본 · 예시 화면'), pcNode('strong', null, '실제 이 PC의 값이 아닙니다'));
+    banner.append(bh, pcNode('p', null, '할 일이 생기면 화면이 어떻게 보이는지 보여 주는 고정 예시입니다. 이 PC 값을 읽지 않고, 점검 기록·할 일·변화 기록을 바꾸거나 저장하지 않습니다.'));
+    const ba = pcNode('div', 'event-actions');
+    ba.append(actionButton('견본 닫기', 'sample-toggle', toggleSample, { label: '견본 닫기: 실제 점검 화면으로 돌아가기' }));
+    banner.append(ba);
+    section.append(banner);
+
+    const box = pcNode('div', 'explanation');
+    box.append(...brandBlock());
+    const title = pcNode('h3', null, `지금 할 일 ${SAMPLE_ISSUES.length}개 (예시)`);
+    box.append(title, pcNode('p', 'muted', '마지막 점검 오늘 10:12 (예시)'));
+    const ul = pcNode('ul', 'records');
+    for (const issue of SAMPLE_ISSUES) ul.append(issueCard(issue, { sample: true }));
+    box.append(ul);
+    section.append(box);
+
+    const grid = pcNode('div', 'grid-2');
+    for (const [key, text, kind, note] of SAMPLE_TILES) {
+      const tile = pcNode('div', 'event');
+      tile.setAttribute('data-sample-item', key);
+      const h = pcNode('div', 'event-head');
+      h.append(pcNode('span', 'item-title', PC_LABELS[key]), pcNode('span', 'tag tag-demo', '예시'));
+      const value = pcNode('p', null);
+      value.append(pcNode('strong', null, text));
+      tile.append(h, value, pcNode('p', kind === 'todo' ? 'decision decision-challenge' : (kind === 'check' ? 'decision decision-unknown' : 'muted'), note));
+      grid.append(tile);
     }
-    return box;
+    section.append(grid);
+    return section;
   }
 
   // 확인 처리한 일(되돌리기 가능)과 시간순 기록
@@ -591,7 +685,7 @@ export function createStudentView({ api, onChange } = {}) {
     details.setAttribute('data-pc-log', String(issueStore.log.length));
     details.open = historyOpen;
     details.addEventListener('toggle', () => { historyOpen = details.open; });
-    details.append(pcNode('summary', null, `점검 기록 · 발견·확인·해결 ${issueStore.log.length}건 (최근 순)`));
+    details.append(pcNode('summary', null, `변화 기록 · 발견·확인·해결 ${issueStore.log.length}건 (최근 순)`));
     if (!issueStore.log.length) {
       details.append(pcNode('p', 'muted', '아직 기록이 없습니다. 바뀐 것을 찾거나 확인 처리하면 여기에 시간순으로 남습니다.'));
     } else {
