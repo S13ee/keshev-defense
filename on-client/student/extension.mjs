@@ -432,10 +432,11 @@ export function createStudentView({ api, onChange } = {}) {
     return [brand, pcNode('p', 'muted', TAGLINE)];
   };
   const issueCard = (issue, { sample = false } = {}) => {
-    const li = pcNode('li', 'event');
+    // 할 일은 제공 '추가 확인' 색(decision-challenge), 확인 필요는 '확인 불가' 색(decision-unknown)을 그대로 씁니다. tag-demo 는 예제·견본에만 씁니다.
+    const li = pcNode('li', issue.kind === 'todo' ? 'decision decision-challenge' : 'decision decision-unknown');
     li.setAttribute('data-issue', issue.id);
     const h = pcNode('div', 'event-head');
-    h.append(pcNode('span', issue.kind === 'todo' ? 'tag tag-demo' : 'tag', KIND_TEXT[issue.kind]), pcNode('span', 'item-title', issue.title));
+    h.append(pcNode('span', 'tag', KIND_TEXT[issue.kind]), pcNode('span', 'item-title', issue.title));
     if (sample) h.append(pcNode('span', 'tag tag-demo', '예시'));
     li.append(h);
     li.append(pcNode('p', null, `근거: ${issue.evidence}`));
@@ -548,7 +549,7 @@ export function createStudentView({ api, onChange } = {}) {
             const li = pcNode('li', change.kind === 'todo' ? 'decision decision-challenge' : (change.kind === 'check' ? 'decision decision-unknown' : 'event'));
             li.setAttribute('data-change-kind', change.kind);
             const h = pcNode('div', 'event-head');
-            h.append(pcNode('span', change.kind === 'note' ? 'tag' : 'tag tag-demo', KIND_TEXT[change.kind]), pcNode('span', 'item-title', change.title));
+            h.append(pcNode('span', 'tag', KIND_TEXT[change.kind]), pcNode('span', 'item-title', change.title));
             li.append(h, pcNode('p', null, `근거: ${change.evidence}`), pcNode('p', 'muted', change.hint));
             ul.append(li);
           }
@@ -570,7 +571,7 @@ export function createStudentView({ api, onChange } = {}) {
         if (changedBy[key]) tile.setAttribute('data-changed', changedBy[key].map((c) => c.kind).join(' '));
         const itemHead = pcNode('div', 'event-head');
         itemHead.append(pcNode('span', 'item-title', PC_LABELS[key]));
-        itemHead.append(pcNode('span', item.ok ? 'tag' : 'tag tag-demo', item.ok ? (stale ? '실측 · 오래됨' : '실측') : '확인 불가'));
+        itemHead.append(pcNode('span', 'tag', item.ok ? (stale ? '실측 · 오래됨' : '실측') : '확인 불가'));
         tile.append(itemHead);
         if (item.ok) {
           const value = pcNode('p', null);
@@ -693,7 +694,7 @@ export function createStudentView({ api, onChange } = {}) {
       for (const entry of [...issueStore.log].reverse()) {
         const li = pcNode('li', 'event');
         li.setAttribute('data-log-type', entry.type);
-        li.append(pcNode('span', entry.type === 'found' ? 'tag tag-demo' : 'tag', LOG_TYPES[entry.type]));
+        li.append(pcNode('span', 'tag', LOG_TYPES[entry.type]));
         li.append(pcNode('span', null, ` ${shortTime(entry.t)} · ${entry.title}${entry.detail ? ` · ${entry.detail}` : ''}`));
         ol.append(li);
       }
