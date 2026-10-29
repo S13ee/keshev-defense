@@ -359,6 +359,7 @@ export function createStudentView({ api, onChange } = {}) {
     notifyChange();
   };
   let historyOpen = false;
+  let detailOpen = false;
 
   async function runPcCheck() {
     if (pcCheck.status === 'loading') return;
@@ -556,8 +557,6 @@ export function createStudentView({ api, onChange } = {}) {
           changeBox.append(ul);
         }
       }
-      section.append(changeBox);
-
       const changedBy = {};
       for (const change of changes.list) (changedBy[change.item] ??= []).push(change);
 
@@ -593,7 +592,17 @@ export function createStudentView({ api, onChange } = {}) {
         }
         grid.append(tile);
       }
-      section.append(grid);
+      // FINAL_PRODUCT_GUIDE 10.4: 핵심 요약 → 다음 행동 → 상세 근거(펼치기). 실측 수·확인 불가 수는 위 요약 줄에 항상 보입니다.
+      const count = (kind) => changes.list.filter((c) => c.kind === kind).length;
+      const changeSummary = !changes.compared ? '첫 점검(비교 없음)' : (changes.list.length ? `바뀐 것 ${changes.list.length}개(할 일 ${count('todo')} · 확인 필요 ${count('check')} · 참고 ${count('note')})` : '바뀐 것 없음');
+      const detail = document.createElement('details');
+      detail.setAttribute('data-pc-detail', '');
+      detail.open = detailOpen;
+      detail.addEventListener('toggle', () => { detailOpen = detail.open; });
+      const summary = pcNode('summary', null, `상세 근거 펼치기 · ${changeSummary} · ${measuredCount === 0 ? '실측 0개' : `실측 ${measuredCount}/6`}${missing.length ? ` · 확인 불가 ${missing.length}개` : ''}`);
+      summary.dataset.focusKey = 'detail-toggle';
+      detail.append(summary, changeBox, grid);
+      section.append(detail);
     }
 
     section.append(renderWatchAndLog());
@@ -686,7 +695,9 @@ export function createStudentView({ api, onChange } = {}) {
     details.setAttribute('data-pc-log', String(issueStore.log.length));
     details.open = historyOpen;
     details.addEventListener('toggle', () => { historyOpen = details.open; });
-    details.append(pcNode('summary', null, `변화 기록 · 발견·확인·해결 ${issueStore.log.length}건 (최근 순)`));
+    const logSummary = pcNode('summary', null, `변화 기록 펼치기 · 발견·확인·해결 ${issueStore.log.length}건 (최근 순)`);
+    logSummary.dataset.focusKey = 'log-toggle';
+    details.append(logSummary);
     if (!issueStore.log.length) {
       details.append(pcNode('p', 'muted', '아직 기록이 없습니다. 바뀐 것을 찾거나 확인 처리하면 여기에 시간순으로 남습니다.'));
     } else {
