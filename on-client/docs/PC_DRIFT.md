@@ -16,7 +16,7 @@
 | **제공** | 보호 현황의 「내 PC 상태」 카드와 「내 PC 확인」 버튼 | `public/pc-status-view.mjs` (제공) |
 | **제공** | 꾸밈 파일을 읽어 앱 이름·색·카드 배치를 적용하는 기능 | `public/app.js`, `public/style.css` (제공) |
 | **직접 만듦** | PC Drift 화면 전체: 점검 결과 판정, 점검 기록 저장, 평소 범위, 바뀐 것 찾기, 할 일·확인 처리·변화 기록, 견본 보기, 오류 안내 | `student/extension.mjs`의 `renderStatus` 위쪽 |
-| **직접 만듦** | 앱 이름 `PC Drift`, 강조색, 학생 카드 먼저 배치 | `student/appearance.json` |
+| **직접 만듦** | 앱 이름 `PC Drift`, 강조색, 학생 카드 먼저 배치, 학생이 준비한 아이콘(256×256 PNG). 첫 화면 그림은 넣지 않음 | `student/appearance.json`, `student/assets/brand-icon.png` |
 | **직접 만듦** | 이 문서, 실행 안내 10장, 방향 문서 | `docs/` 아래 학생 문서 3개 |
 
 - PC Drift는 제공 통로를 **「내 PC 점검」(또는 「다시 점검」)을 누를 때 한 번만** 부릅니다. 화면을 다시 그릴 때나 정해진 시간마다 스스로 부르지 않습니다. [코드 확인]
